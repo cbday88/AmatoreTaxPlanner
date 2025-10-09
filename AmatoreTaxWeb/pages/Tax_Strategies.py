@@ -1,112 +1,129 @@
 import streamlit as st
+from pathlib import Path
 
-st.set_page_config(page_title="Amatore & Co Tax Strategies", page_icon="💼")
+st.set_page_config(page_title="Amatore & Co — Tax Strategies", page_icon="📘", layout="centered")
 
-# --- Header ---
-st.image("amatore_collc_cover.jpg", width="stretch")
-st.title("💼 Amatore & Co — Tax Strategies")
-st.caption("Helping clients reduce taxes through strategic planning")
+LOGO_PATH = Path("amatore_collc_cover.jpg")
+if LOGO_PATH.exists():
+    st.image(str(LOGO_PATH), use_container_width=True)
 
-# --- Strategy Selector ---
-strategy = st.selectbox(
-    "Select a Strategy",
-    [
-        "Oil & Gas Investment",
-        "Augusta Rule",
-        "Family Management Company",
-        "Cost Segregation"
-    ]
-)
+st.title("📘 Amatore & Co — Tax Strategies")
+st.caption("Authoritative references + your client handouts, all in one place.")
 
-# --- Oil & Gas Investment ---
-if strategy == "Oil & Gas Investment":
-    st.header("Oil & Gas Investment")
-    st.write("""
-An investment in oil and gas can reduce a taxpayer’s liability through **Intangible Drilling Costs (IDCs)**,
-which are often largely deductible in year one. Tangible Drilling Costs (TDCs) are capitalized and depreciated over time.
-Investors may also qualify for a **depletion allowance**, providing continued deductions over the life of the well.
-    """)
-    st.subheader("Possible Risk")
-    st.write("• Returns vary just like any investment.\n• Market conditions may impact results.")
-    st.subheader("Implementation Steps")
-    st.write("""
-1️⃣ Determine Investment (Client) — Review offering, confirm risk tolerance, and objectives.  
-2️⃣ Identify Deductible Drilling Costs (Advisor) — Separate IDC vs TDC.  
-3️⃣ Apply Depletion Allowance (Advisor).  
-4️⃣ Leverage Accelerated Depreciation (Advisor).
-    """)
-    with open("Oil and Gas Investment - White Paper.pdf", "rb") as f:
-        st.download_button("📄 Download White Paper", f, file_name="Oil_and_Gas_White_Paper.pdf")
-    with open("Oil and Gas Investment - App.pdf", "rb") as f:
-        st.download_button("📄 Download Application", f, file_name="Oil_and_Gas_App.pdf")
+# ---- Strategy Catalog (with IRS links for trust) ----
+STRATEGIES = [
+    {
+        "name": "Augusta Rule (IRC §280A(g))",
+        "summary": "Rent your personal residence to your business for up to 14 days per year — income excluded; business deducts FMV rent.",
+        "irs_links": [
+            {"label": "26 U.S. Code § 280A(g) – Dwelling unit used as a residence", "url": "https://www.law.cornell.edu/uscode/text/26/280A"},
+            {"label": "IRS Publication 535 – Business Expenses (home rental context)", "url": "https://www.irs.gov/publications/p535"},
+        ],
+        "downloads": [
+            "Augusta Rule - Implementation.pdf",
+            "Lease Agreement.pdf",
+        ],
+        "notes": [
+            "Document business purpose (agenda/minutes), FMV (3+ comps), and payment.",
+            "14-day max exclusion per calendar year; do not issue 1099-MISC to yourself."
+        ]
+    },
+    {
+        "name": "Cost Segregation (MACRS/Bonus/§179)",
+        "summary": "Reclassify building components into shorter lives to accelerate depreciation; often paired with bonus and/or §179.",
+        "irs_links": [
+            {"label": "IRS Cost Segregation Audit Techniques Guide", "url": "https://www.irs.gov/businesses/small-businesses-self-employed/cost-segregation-audit-techniques-guide"},
+            {"label": "26 U.S. Code § 168 – MACRS", "url": "https://www.law.cornell.edu/uscode/text/26/168"},
+            {"label": "26 U.S. Code § 179 – Election to expense certain depreciable assets", "url": "https://www.law.cornell.edu/uscode/text/26/179"},
+            {"label": "Form 3115 – Change in Accounting Method", "url": "https://www.irs.gov/forms-pubs/about-form-3115"},
+        ],
+        "downloads": [
+            "Cost Segregation-App.pdf",
+            "Accelerated Depreciation_Cost Segregation Example.pdf",
+            "Asset Class Examples.pdf",
+        ],
+        "notes": [
+            "Order a benefits analysis; if moving from straight-line to accelerated, file Form 3115.",
+            "Engineered study recommended; maintain invoices, drawings, closing statements."
+        ]
+    },
+    {
+        "name": "Family Management Company (Paying Children Reasonably)",
+        "summary": "Establish LLC + EIN; pay reasonable wages for real work; document hours/tasks; ensure payroll/W-2 where required.",
+        "irs_links": [
+            {"label": "IRS Publication 15 (Circular E) – Employer’s Tax Guide", "url": "https://www.irs.gov/publications/p15"},
+            {"label": "IRS – Family Help (children employed by parents)", "url": "https://www.irs.gov/businesses/small-businesses-self-employed/family-help"},
+        ],
+        "downloads": [
+            "Family Management Company-White Paper.pdf",
+            "Family Management Company-App.pdf",
+        ],
+        "notes": [
+            "Wage must be reasonable, age-appropriate, and for bona fide services.",
+            "Entity type affects FICA/FUTA rules; maintain clean invoicing and payroll records."
+        ]
+    },
+    {
+        "name": "Oil & Gas Investment (IDCs & Depletion)",
+        "summary": "Potential current-year deduction for intangible drilling costs (IDCs) and ongoing percentage depletion (where eligible).",
+        "irs_links": [
+            {"label": "26 U.S. Code § 263(c) – Intangible drilling and development costs", "url": "https://www.law.cornell.edu/uscode/text/26/263"},
+            {"label": "26 U.S. Code § 611–613 – Depletion", "url": "https://www.law.cornell.edu/uscode/text/26/611"},
+            {"label": "IRS Publication 535 – Business Expenses", "url": "https://www.irs.gov/publications/p535"},
+        ],
+        "downloads": [
+            "Oil and Gas Investment - White Paper.pdf",
+            "Oil and Gas Investment - App.pdf",
+        ],
+        "notes": [
+            "Suitability review required; track IDC vs tangible allocation; expect K-1 reporting.",
+            "Returns vary; investment risk disclosure is essential."
+        ]
+    },
 
-# --- Augusta Rule ---
-elif strategy == "Augusta Rule":
-    st.header("Augusta Rule")
-    st.write("""
-Homeowners can rent their personal residence for up to **14 days per year** without reporting the income.
-The business deducts the rent as an expense, and the homeowner receives it **tax-free**.
-    """)
-    st.subheader("Possible Risk")
-    st.write("""
-• Failure to document meetings or agreements correctly.  
-• Overstating fair rental value.  
-• Renting more than 14 days removes the exemption.
-    """)
-    st.subheader("Implementation Steps")
-    st.write("""
-1️⃣ Confirm Eligibility — Home must be primary or secondary.  
-2️⃣ Determine Market Rate — Document comparable rentals.  
-3️⃣ Sign Lease Agreement — Outline purpose, rate, and duration.  
-4️⃣ Keep Documentation — Rental agreement, check, and meeting minutes.
-    """)
-    with open("Augusta Rule - Implementation.pdf", "rb") as f:
-        st.download_button("📄 Download Implementation Guide", f, file_name="Augusta_Rule_Implementation.pdf")
-    with open("Lease Agreement.pdf", "rb") as f:
-        st.download_button("📄 Download Lease Agreement", f, file_name="Augusta_Rule_Lease.pdf")
+    # ---- Add more house strategies here as you build them out ----
+    # {
+    #     "name": "Accountable Plan",
+    #     "summary": "Reimburse employees/owners for business expenses, non-taxable when substantiated.",
+    #     "irs_links": [{"label": "IRS Publication 463 – Travel, Gift, Car", "url": "https://www.irs.gov/publications/p463"}],
+    #     "downloads": [],
+    #     "notes": ["Written plan + receipts required.", "Reimbursements reduce taxable wages."]
+    # },
+]
 
-# --- Family Management Company ---
-elif strategy == "Family Management Company":
-    st.header("Family Management Company")
-    st.write("""
-A **Family Management Company (FMC)** allows owners to employ family members—especially children—for legitimate work,
-shifting income into lower tax brackets and teaching business skills.
-    """)
-    st.subheader("Possible Risk")
-    st.write("• Wages must be reasonable and documented.\n• FICA taxes apply if under an S-Corp.")
-    st.subheader("Implementation Steps")
-    st.write("""
-1️⃣ Entity Formation — Form an LLC and obtain an EIN.  
-2️⃣ Bank Account Setup — Separate from personal accounts.  
-3️⃣ Invoicing Process — Document hours and tasks.  
-4️⃣ Payment & Payroll — Issue W-2s as required.
-    """)
-    with open("Family Management Company-White Paper.pdf", "rb") as f:
-        st.download_button("📄 Download White Paper", f, file_name="Family_Management_White_Paper.pdf")
-    with open("Family Management Company-App.pdf", "rb") as f:
-        st.download_button("📄 Download Application", f, file_name="Family_Management_App.pdf")
+def file_exists(fname: str) -> bool:
+    return Path(fname).exists()
 
-# --- Cost Segregation ---
-elif strategy == "Cost Segregation":
-    st.header("Cost Segregation")
-    st.write("""
-A **Cost Segregation Study** accelerates depreciation by reclassifying building components
-into shorter recovery periods—improving cash flow and reducing taxable income.
-    """)
-    st.subheader("Possible Risk")
-    st.write("• Misclassification or incomplete study may cause IRS adjustments.")
-    st.subheader("Implementation Steps")
-    st.write("""
-1️⃣ Conduct Benefits Analysis — Determine eligibility and savings.  
-2️⃣ Client Agreement — Sign the study agreement.  
-3️⃣ Property Data Collection — Gather closing statements, invoices, drawings.  
-4️⃣ On-Site Review — Engineers classify components (5-, 7-, 15-year).  
-5️⃣ File Form 3115 to document method change.
-    """)
-    with open("Cost Segregation-App.pdf", "rb") as f:
-        st.download_button("📄 Download Cost Segregation App", f, file_name="Cost_Segregation_App.pdf")
-    with open("Asset Class Examples.pdf", "rb") as f:
-        st.download_button("📄 Download Asset Class Examples", f, file_name="Cost_Segregation_Assets.pdf")
+def render_strategy(block: dict):
+    st.subheader(block["name"])
+    st.write(block["summary"])
 
-st.write("---")
-st.caption("© 2025 Amatore & Co LLC | Educational use only — confirm all tax positions with your advisor.")
+    if block.get("irs_links"):
+        st.markdown("**Authoritative References**")
+        for ref in block["irs_links"]:
+            st.markdown(f"- [{ref['label']}]({ref['url']})")
+
+    if block.get("downloads"):
+        st.markdown("**Client Handouts / Apps**")
+        for fname in block["downloads"]:
+            if file_exists(fname):
+                with open(fname, "rb") as f:
+                    st.download_button(
+                        label=f"Download: {fname}",
+                        data=f.read(),
+                        file_name=fname
+                    )
+            else:
+                st.markdown(f"- _{fname} (file not found in repo)_")
+
+    if block.get("notes"):
+        st.markdown("**Implementation Notes**")
+        for n in block["notes"]:
+            st.markdown(f"- {n}")
+
+    st.divider()
+
+for entry in STRATEGIES:
+    render_strategy(entry)
+
+st.caption("Amatore & Co © 2025 — These materials are for planning/education; confirm positions before filing.")
