@@ -1,42 +1,72 @@
-# pages/Tax_Strategies.py
 import streamlit as st
 from pathlib import Path
 
 st.set_page_config(page_title="Amatore & Co — Tax Strategies", page_icon="📘", layout="centered")
 
-st.title("📘 Amatore & Co — Tax Strategies")
-st.caption("Authoritative references plus client-ready handouts. These materials are for planning/education; confirm positions before filing.")
+LOGO_PATH = Path("amatore_collc_cover.jpg")
+if LOGO_PATH.exists():
+    st.image(str(LOGO_PATH), use_container_width=True)
 
-# ---------- Strategy catalog ----------
+st.title("📘 Amatore & Co — Tax Strategies")
+st.caption("Authoritative references + your client handouts, all in one place.")
+
+# Helper: check file exists in repo root
+def file_exists(fname: str) -> bool:
+    return Path(fname).exists()
+
+def downloads_section(files):
+    if not files:
+        return
+    st.markdown("**Client Handouts**")
+    for fname in files:
+        if file_exists(fname):
+            with open(fname, "rb") as f:
+                st.download_button(label=f"Download: {fname}", data=f.read(), file_name=fname)
+        else:
+            st.markdown(f"- _{fname} (file not found in repo)_")
+
+def refs_section(refs):
+    if not refs:
+        return
+    st.markdown("**IRS References**")
+    for r in refs:
+        st.markdown(f"- [{r['label']}]({r['url']})")
+
+def notes_section(notes):
+    if not notes:
+        return
+    st.markdown("**Implementation Notes**")
+    for n in notes:
+        st.markdown(f"- {n}")
+
+# ----------------------------------------------------------------
+# Strategy Catalog (synchronized with the calculator v6.3)
+# ----------------------------------------------------------------
 STRATEGIES = [
     {
-        "key": "augusta",
         "name": "Augusta Rule (IRC §280A(g))",
-        "summary": "Rent your personal residence to your business for up to 14 days per year. Income is excluded; the business deducts fair-market rent.",
-        "irs_links": [
-            {"label": "26 U.S.C. §280A(g) — Dwelling unit used as a residence", "url": "https://www.law.cornell.edu/uscode/text/26/280A"},
-            {"label": "IRS Publication 535 — Business Expenses", "url": "https://www.irs.gov/publications/p535"},
+        "summary": "Rent your personal residence to your business up to 14 days/year — income excluded; business deducts FMV rent.",
+        "irs": [
+            {"label": "26 U.S. Code § 280A(g) – Dwelling unit used as a residence", "url": "https://www.law.cornell.edu/uscode/text/26/280A"},
+            {"label": "IRS Publication 535 – Business Expenses", "url": "https://www.irs.gov/publications/p535"},
         ],
         "downloads": [
             "Augusta Rule - Implementation.pdf",
             "Lease Agreement.pdf",
         ],
         "notes": [
-            "Document fair market rental value with at least three comps (e.g., Peerspace/Airbnb/venues).",
-            "Sign a short lease between the owner and the business.",
-            "Hold legitimate business meetings; keep agendas and minutes.",
-            "Do not issue a 1099 to yourself; ≤ 14 rental days per year are excluded."
-        ],
+            "Document business purpose (agenda/minutes) and FMV (3+ comps).",
+            "Do not exceed 14 days; do not issue a 1099 to yourself."
+        ]
     },
     {
-        "key": "costseg",
         "name": "Cost Segregation (MACRS/Bonus/§179)",
-        "summary": "Reclassify building components into shorter recovery periods to accelerate depreciation; often paired with bonus depreciation and/or §179.",
-        "irs_links": [
+        "summary": "Reclassify building components into shorter lives to accelerate depreciation; often paired with bonus and/or §179.",
+        "irs": [
             {"label": "IRS Cost Segregation Audit Techniques Guide", "url": "https://www.irs.gov/businesses/small-businesses-self-employed/cost-segregation-audit-techniques-guide"},
-            {"label": "26 U.S.C. §168 — MACRS", "url": "https://www.law.cornell.edu/uscode/text/26/168"},
-            {"label": "26 U.S.C. §179 — Election to expense certain property", "url": "https://www.law.cornell.edu/uscode/text/26/179"},
-            {"label": "Form 3115 — Change in Accounting Method", "url": "https://www.irs.gov/forms-pubs/about-form-3115"},
+            {"label": "26 U.S. Code § 168 – MACRS", "url": "https://www.law.cornell.edu/uscode/text/26/168"},
+            {"label": "26 U.S. Code § 179 – Election to expense certain depreciable assets", "url": "https://www.law.cornell.edu/uscode/text/26/179"},
+            {"label": "Form 3115 – Change in Accounting Method", "url": "https://www.irs.gov/forms-pubs/about-form-3115"},
         ],
         "downloads": [
             "Cost Segregation-App.pdf",
@@ -44,122 +74,152 @@ STRATEGIES = [
             "Asset Class Examples.pdf",
         ],
         "notes": [
-            "Order a benefits analysis first to estimate savings.",
-            "Use an engineered study; retain invoices, drawings, and closing statements.",
-            "If changing methods, file Form 3115 with the return.",
-        ],
+            "Order a benefits analysis to confirm savings.",
+            "Engineer study recommended; maintain closing/build docs; file 3115 if required."
+        ]
     },
     {
-        "key": "fmc",
-        "name": "Family Management Company (Paying Children Reasonably)",
-        "summary": "Use a family LLC with EIN to pay children for bona fide services. Wages must be reasonable and documented; payroll/W-2 rules may apply.",
-        "irs_links": [
-            {"label": "IRS Pub. 15 (Circular E) — Employer’s Tax Guide", "url": "https://www.irs.gov/publications/p15"},
-            {"label": "IRS — Family Help (children employed by parents)", "url": "https://www.irs.gov/businesses/small-businesses-self-employed/family-help"},
-        ],
-        "downloads": [
-            "Family Management Company-White Paper.pdf",
-            "Family Management Company-App.pdf",
-        ],
-        "notes": [
-            "Track hours and tasks; keep invoices from the FMC to the operating company.",
-            "Open a dedicated FMC bank account; pay by check or ACH.",
-            "Run payroll and issue W-2s if required by entity type and age.",
-        ],
-    },
-    {
-        "key": "oilgas",
         "name": "Oil & Gas Investment (IDCs & Depletion)",
         "summary": "Potential current-year deduction for intangible drilling costs (IDCs) and ongoing percentage depletion where eligible.",
-        "irs_links": [
-            {"label": "26 U.S.C. §263(c) — Intangible drilling & development costs", "url": "https://www.law.cornell.edu/uscode/text/26/263"},
-            {"label": "26 U.S.C. §§611–613 — Depletion", "url": "https://www.law.cornell.edu/uscode/text/26/611"},
-            {"label": "IRS Publication 535 — Business Expenses", "url": "https://www.irs.gov/publications/p535"},
+        "irs": [
+            {"label": "26 U.S. Code § 263(c) – Intangible drilling and development costs", "url": "https://www.law.cornell.edu/uscode/text/26/263"},
+            {"label": "26 U.S. Code §§ 611–613 – Depletion", "url": "https://www.law.cornell.edu/uscode/text/26/611"},
+            {"label": "IRS Publication 535 – Business Expenses", "url": "https://www.irs.gov/publications/p535"},
         ],
         "downloads": [
             "Oil and Gas Investment - White Paper.pdf",
             "Oil and Gas Investment - App.pdf",
         ],
         "notes": [
-            "Confirm suitability and risk tolerance; review private placement docs.",
-            "Document the split of IDCs vs tangible equipment.",
-            "Track depletion and K-1 reporting annually.",
-        ],
+            "Perform suitability review; understand risks and IDC vs. tangible allocation.",
+            "Expect K-1 reporting; track depletion."
+        ]
     },
-
-    # --- Add more strategies as you publish them (examples below) ---
-    # {
-    #     "key": "accountable_plan",
-    #     "name": "Accountable Plan (Reimbursements)",
-    #     "summary": "Reimburse substantiated business expenses to employees/owners tax-free under a written accountable plan.",
-    #     "irs_links": [{"label": "IRS Publication 463 — Travel, Gift, Car", "url": "https://www.irs.gov/publications/p463"}],
-    #     "downloads": [],
-    #     "notes": ["Require timely substantiation and return of excess advances.", "Reduces W-2 wages; keep receipts."]
-    # },
-    # {
-    #     "key": "daf_bunching",
-    #     "name": "Charitable Bunching / Donor-Advised Fund",
-    #     "summary": "Bunch multiple years of gifts into one year to exceed the standard deduction; use a DAF to grant over time.",
-    #     "irs_links": [{"label": "IRS Charitable Contributions — Pub 526", "url": "https://www.irs.gov/publications/p526"}],
-    #     "downloads": [],
-    #     "notes": ["Mind AGI limits and appraisal rules for non-cash gifts."]
-    # },
+    {
+        "name": "Family Management Company (Hiring Your Kids)",
+        "summary": "Compensate children for bona fide services via a family LLC; wages must be reasonable and documented.",
+        "irs": [
+            {"label": "IRS — Family Help (children employed by parents)", "url": "https://www.irs.gov/businesses/small-businesses-self-employed/family-help"},
+            {"label": "IRS Publication 15 (Circular E) – Employer’s Tax Guide", "url": "https://www.irs.gov/publications/p15"},
+        ],
+        "downloads": [
+            "Family Management Company-White Paper.pdf",
+            "Family Management Company-App.pdf",
+        ],
+        "notes": [
+            "Form LLC + EIN, open dedicated bank account.",
+            "Track hours & tasks; run payroll/W-2 when required; maintain invoices."
+        ]
+    },
+    {
+        "name": "Equipment Leasing",
+        "summary": "Lease payments for business-use equipment are deductible.",
+        "irs": [{"label": "IRS Publication 535 – Business Expenses", "url": "https://www.irs.gov/publications/p535"}],
+        "downloads": [],
+        "notes": ["Maintain lease documents and business-use percentage.", "Keep payment evidence."]
+    },
+    {
+        "name": "Accelerated Depreciation",
+        "summary": "Bonus/§179/MACRS for qualifying property used in business.",
+        "irs": [
+            {"label": "26 U.S. Code § 179", "url": "https://www.law.cornell.edu/uscode/text/26/179"},
+            {"label": "26 U.S. Code § 168 (MACRS)", "url": "https://www.law.cornell.edu/uscode/text/26/168"},
+        ],
+        "downloads": [],
+        "notes": ["Confirm eligibility & basis; coordinate with any cost segregation."]
+    },
+    {
+        "name": "Accountable Plan",
+        "summary": "Reimburse owners/employees for substantiated expenses; non-taxable to recipient, deductible to business.",
+        "irs": [{"label": "IRS Publication 463 – Travel, Gift, Car", "url": "https://www.irs.gov/publications/p463"}],
+        "downloads": [],
+        "notes": ["Adopt a written plan; collect timely receipts; reimburse through payroll/AP."]
+    },
+    {
+        "name": "Business Travel Expenses",
+        "summary": "Ordinary & necessary travel costs for business are deductible.",
+        "irs": [{"label": "IRS Publication 463 – Travel, Gift, Car", "url": "https://www.irs.gov/publications/p463"}],
+        "downloads": [],
+        "notes": ["Keep agendas/receipts; document business purpose."]
+    },
+    {
+        "name": "Board of Directors Fees",
+        "summary": "Fees paid to independent directors for services are deductible.",
+        "irs": [{"label": "IRS Publication 535 – Business Expenses", "url": "https://www.irs.gov/publications/p535"}],
+        "downloads": [],
+        "notes": ["Maintain agreements/minutes; issue 1099-NEC where applicable."]
+    },
+    {
+        "name": "Defined Benefit Plan",
+        "summary": "Employer contributions are deductible; high potential deferrals, but require actuarial/TPA oversight.",
+        "irs": [{"label": "IRS Publication 560 – Retirement Plans for Small Business", "url": "https://www.irs.gov/publications/p560"}],
+        "downloads": [],
+        "notes": ["Coordinate with actuary/TPA; fund by deadlines; keep plan documents."]
+    },
+    {
+        "name": "Educational Assistance Program (IRC §127)",
+        "summary": "Up to $5,250 per employee excludable; employer deduction allowed.",
+        "irs": [{"label": "26 U.S. Code § 127 – Educational assistance programs", "url": "https://www.law.cornell.edu/uscode/text/26/127"}],
+        "downloads": [],
+        "notes": ["Adopt written plan; track eligible expenses and recipients."]
+    },
+    {
+        "name": "Home Office Deduction",
+        "summary": "Exclusive & regular use for business; simplified or actual-expense method.",
+        "irs": [{"label": "IRS Publication 587 – Business Use of Your Home", "url": "https://www.irs.gov/publications/p587"}],
+        "downloads": [],
+        "notes": ["Document square footage and exclusive use; retain expense records."]
+    },
+    {
+        "name": "SIMPLE IRA (Employer Contributions)",
+        "summary": "Employer contributions to SIMPLE are deductible to the business.",
+        "irs": [{"label": "IRS Publication 560 – Retirement Plans for Small Business", "url": "https://www.irs.gov/publications/p560"}],
+        "downloads": [],
+        "notes": ["Adopt plan; deposit contributions timely; observe limits."]
+    },
+    {
+        "name": "Employer Retirement Match",
+        "summary": "Employer match contributions (401(k)/SIMPLE/etc.) are deductible.",
+        "irs": [{"label": "IRS Publication 560 – Retirement Plans for Small Business", "url": "https://www.irs.gov/publications/p560"}],
+        "downloads": [],
+        "notes": ["Coordinate plan document and funding deadlines; track eligibility."]
+    },
+    {
+        "name": "Maximize Retirement Contributions",
+        "summary": "Maximize employer-side contributions (e.g., SEP, Solo 401(k)) to reduce business income.",
+        "irs": [{"label": "IRS Publication 560 – Retirement Plans for Small Business", "url": "https://www.irs.gov/publications/p560"}],
+        "downloads": [],
+        "notes": ["Confirm contribution limits with TPA/CPA; coordinate with W-2 comp."]
+    },
+    {
+        "name": "Donor Advised Fund (DAF)",
+        "summary": "Charitable donation to DAF; timing control with AGI limits and carryforwards.",
+        "irs": [{"label": "IRS Publication 526 – Charitable Contributions", "url": "https://www.irs.gov/publications/p526"}],
+        "downloads": [],
+        "notes": ["Obtain written acknowledgements; track AGI limits and carryforwards."]
+    },
+    {
+        "name": "Installment Sale",
+        "summary": "Defer recognition of gain to cash received; current-year capital gain can be lower.",
+        "irs": [{"label": "IRS Publication 537 – Installment Sales", "url": "https://www.irs.gov/publications/p537"}],
+        "downloads": [],
+        "notes": ["Structure properly; compute gross profit %, basis, and interest component."]
+    },
+    {
+        "name": "Roth IRA Conversion",
+        "summary": "Converting pre-tax IRA to Roth adds ordinary income now; future qualified growth tax-free.",
+        "irs": [{"label": "IRS Publication 590-A – Contributions to IRAs", "url": "https://www.irs.gov/publications/p590a"}],
+        "downloads": [],
+        "notes": ["Model bracket fill-up; consider IRMAA/phaseout implications."]
+    },
 ]
 
-# ---------- Helpers ----------
-def file_exists(fname: str) -> bool:
-    return Path(fname).exists()
-
-def render_strategy(block: dict):
-    st.subheader(block["name"])
-    st.write(block["summary"])
-
-    # Authoritative IRS references
-    if block.get("irs_links"):
-        st.markdown("**Authoritative References**")
-        for ref in block["irs_links"]:
-            st.markdown(f"- [{ref['label']}]({ref['url']})")
-
-    # Client handouts / apps (download buttons for files that exist)
-    if block.get("downloads"):
-        st.markdown("**Client Handouts / Apps**")
-        for fname in block["downloads"]:
-            if file_exists(fname):
-                with open(fname, "rb") as f:
-                    st.download_button(
-                        label=f"Download: {fname}",
-                        data=f.read(),
-                        file_name=fname
-                    )
-            else:
-                st.markdown(f"- _{fname} (file not found in repository)_")
-
-    # Implementation notes
-    if block.get("notes"):
-        st.markdown("**Implementation Notes**")
-        for n in block["notes"]:
-            st.markdown(f"- {n}")
-
-    st.divider()
-
-# ---------- Quick search / filter ----------
-q = st.text_input("Filter strategies by keyword (name, summary, or notes):", "")
-filtered = []
-q_lower = q.strip().lower()
+# Render
 for s in STRATEGIES:
-    hay = " ".join([
-        s["name"],
-        s["summary"],
-        " ".join([n for n in s.get("notes", [])]),
-        " ".join([l["label"] for l in s.get("irs_links", [])]),
-    ]).lower()
-    if not q_lower or q_lower in hay:
-        filtered.append(s)
-
-if not filtered:
-    st.info("No strategies matched your filter. Clear the search to see all.")
-else:
-    for entry in filtered:
-        render_strategy(entry)
-
-st.caption("Amatore & Co © 2025 — Planning tool only; confirm positions before filing.")
+    with st.container(border=True):
+        st.subheader(s["name"])
+        st.write(s["summary"])
+        refs_section(s.get("irs", []))
+        downloads_section(s.get("downloads", []))
+        notes_section(s.get("notes", []))
+st.caption("Amatore & Co © 2025 — Planning & education only; confirm positions before filing.")
