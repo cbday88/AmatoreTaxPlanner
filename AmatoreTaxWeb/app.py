@@ -24,20 +24,20 @@ if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), use_container_width=True)
 
 st.caption("4010 Boardman-Canfield Rd Unit 1A • Canfield, OH 44406 • (330) 533-0884")
-st.title("Amatore & Co — Tax Planning Calculator v5.1")
+st.title("Amatore & Co — Tax Planning Calculator v5.2")
 st.caption("Way More Money, Way Less Taxes")
 
 # -------------------- SIDEBAR INPUTS --------------------
 with st.sidebar:
-    st.header("Client Inputs")
+    st.header("Client")
+    client_name = st.text_input("Client Name (shown on PDF)", value="Amatore Client")
 
-    # Filing status
-    status = st.selectbox("Filing Status", ["MFJ", "S", "HOH"], index=0)
+    st.header("Filing Status")
+    status = st.selectbox("Status", ["MFJ", "S", "HOH"], index=0)
 
-    # --- Income entry (more granular) ---
+    # --- Income entry (granular) ---
     st.subheader("Income Details")
     wages = st.number_input("W-2 Wages", 0, 5_000_000, 120_000, 1_000)
-
     schc_1099 = st.number_input("1099 / Schedule C Profit (Self-Employment)", 0, 5_000_000, 60_000, 1_000)
     scorp_k1 = st.number_input("S-Corp K-1 Income", 0, 5_000_000, 0, 1_000)
     ccorp_div = st.number_input("C-Corp Dividends", 0, 5_000_000, 0, 500)
@@ -49,7 +49,7 @@ with st.sidebar:
     itemized = st.number_input("Itemized Deductions (baseline)", 0, 5_000_000, 12_000, 500)
 
     # ----- STATE TAX -----
-    st.header("State Tax Selection")
+    st.header("State Tax")
     states = {
         "Ohio": 0.035, "Pennsylvania": 0.0307, "Florida": 0.0,
         "New York": 0.064, "California": 0.070, "Texas": 0.0,
@@ -82,7 +82,6 @@ with st.sidebar:
 
     chosen = st.multiselect("Select strategies to model", list(strategy_catalog.keys()), default=["Augusta Rule"])
 
-    # For each chosen strategy: amount + where it applies
     strategy_configs = {}
     for s in chosen:
         st.markdown(f"**{s}** — {strategy_catalog[s]}")
@@ -99,7 +98,6 @@ with st.sidebar:
         st.divider()
 
 # -------------------- MAP NEW INCOME FIELDS TO ENGINE --------------------
-# Everything not self-employment is lumped into 'other_income' for the current engine.
 other_income = scorp_k1 + ccorp_div + int_income + div_income + cap_gains
 
 # Strategies: sum per target
@@ -115,12 +113,12 @@ itemized_baseline = itemized
 itemized_scenario = max(0, itemized + deduct_to_itemized)
 
 # -------------------- RUN CALCULATIONS --------------------
-# Baseline (no strategies, no S-Corp election)
+# Baseline (no strategies, no S-Corp)
 inp_base = Inputs(status=status, wages=wages, sch_c=sch_c_baseline, other_income=other_income,
                   itemized=itemized_baseline, s_corp=False)
 base = compute_baseline(inp_base)
 
-# Scenario (strategies + optional S-Corp election on the 1099/Sched C)
+# Scenario (strategies + optional S-Corp)
 inp_scen = Inputs(status=status, wages=wages, sch_c=sch_c_scenario, other_income=other_income,
                   itemized=itemized_scenario, s_corp=s_elect, reasonable_comp=rc)
 scen = compute_scenario(inp_scen)
@@ -153,17 +151,35 @@ st.dataframe(
     use_container_width=True
 )
 
+# Savings (green), plus Estimated Due/Refund text for the scenario
+savings = base_total_tax - scen_total_tax
+owed_or_refund = "Estimated Refund" if scen_net_due < 0 else "Estimated Amount Due"
+owed_or_refund_amt = abs(scen_net_due)
+
 st.write("---")
-st.metric("Projected Federal + State Savings", f"${base_total_tax - scen_total_tax:,.0f}")
-st.metric("Baseline Total Tax (Fed + State)",  f"${base_total_tax:,.0f}")
-st.metric("Scenario Total Tax (Fed + State)",  f"${scen_total_tax:,.0f}")
-st.metric("Net Difference After Payments",     f"${base_net_due - scen_net_due:,.0f}")
+st.markdown(
+    f"<div style='font-size:20px;'>Projected Federal + State Savings: "
+    f"<b><span style='color:#1a7f37;'>${savings:,.0f}</span></b></div>",
+    unsafe_allow_html=True
+)
+colA, colB = st.columns(2)
+with colA:
+    st.metric("Baseline Total Tax (Fed + State)", f"${base_total_tax:,.0f}")
+with colB:
+    st.metric("Scenario Total Tax (Fed + State)", f"${scen_total_tax:,.0f}")
+
+st.markdown(
+    f"<div style='margin-top:8px;font-size:18px;'><b>{owed_or_refund} (after payments):</b> "
+    f"${owed_or_refund_amt:,.0f}</div>",
+    unsafe_allow_html=True
+)
+
 st.write("---")
 
 # -------------------- PDF GENERATION --------------------
-def generate_summary_pdf(base, scen, base_total_tax, scen_total_tax, base_net_due, scen_net_due,
+def generate_summary_pdf(client_name, base, scen, base_total_tax, scen_total_tax, base_net_due, scen_net_due,
                          state, state_rate, strategy_configs):
-    """Build a branded one-pager with chart + full breakdown."""
+    """Branded one-pager with chart + full breakdown + client name."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
@@ -174,6 +190,7 @@ def generate_summary_pdf(base, scen, base_total_tax, scen_total_tax, base_net_du
         story.append(Image(str(LOGO_PATH), width=6.5*72, height=1.5*72))
         story.append(Spacer(1, 12))
     story.append(Paragraph("<b>Amatore & Co • Tax Planning Summary</b>", styles["Title"]))
+    story.append(Paragraph(f"<b>Client:</b> {client_name}", styles["Normal"]))
     story.append(Paragraph("4010 Boardman-Canfield Rd Unit 1A • Canfield, OH 44406 • (330) 533-0884", styles["Normal"]))
     story.append(Paragraph(datetime.now().strftime("%B %d, %Y"), styles["Normal"]))
     story.append(Spacer(1, 14))
@@ -182,8 +199,8 @@ def generate_summary_pdf(base, scen, base_total_tax, scen_total_tax, base_net_du
     story.append(Paragraph("<b>Selected Strategies & Amounts</b>", styles["Heading2"]))
     if strategy_configs:
         for s, cfg in strategy_configs.items():
-            line = f"• {s}: ${cfg['amount']:,.0f} — Applied to: {'Schedule C' if cfg['target'].startswith('Schedule C') else 'Itemized'}"
-            story.append(Paragraph(line, styles["Normal"]))
+            where = "Schedule C" if cfg["target"].startswith("Schedule C") else "Itemized"
+            story.append(Paragraph(f"• {s}: ${cfg['amount']:,.0f} — Applied to: {where}", styles["Normal"]))
     else:
         story.append(Paragraph("No strategies selected.", styles["Normal"]))
     story.append(Spacer(1, 8))
@@ -232,7 +249,7 @@ def generate_summary_pdf(base, scen, base_total_tax, scen_total_tax, base_net_du
     bar_width = 0.35
     x = range(len(labels))
     plt.bar(list(x), before_vals, width=bar_width, label="Before", color="#0A2647")  # navy
-    plt.bar([p + bar_width for p in x], after_vals, width=bar_width, label="After", color="#F4B400")  # gold
+    plt.bar([p + bar_width for p in x], after_vals, width=bar_width, label="After", color="#1a7f37")  # green
     plt.xticks([p + bar_width/2 for p in x], labels)
     plt.ylabel("Tax ($)")
     plt.title("Tax Comparison — Before vs After Strategies")
@@ -245,9 +262,23 @@ def generate_summary_pdf(base, scen, base_total_tax, scen_total_tax, base_net_du
         story.append(Image(tmp.name, width=400, height=240))
     story.append(Spacer(1, 12))
 
-    # Savings + disclosure
-    story.append(Paragraph(f"<b>Total Tax Savings from Strategies:</b> ${total_savings:,.0f}", styles["Heading2"]))
-    story.append(Spacer(1, 8))
+    # Savings (green) + Estimated Due/Refund line
+    owed_or_refund_pdf = "Estimated Refund" if scen_net_due < 0 else "Estimated Amount Due"
+    owed_amt_pdf = abs(scen_net_due)
+
+    story.append(Paragraph(
+        f"<b>Total Tax Savings from Strategies:</b> "
+        f"<font color='#1a7f37'><b>${total_savings:,.0f}</b></font>",
+        styles["Heading2"]
+    ))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(
+        f"<b>{owed_or_refund_pdf} (after payments):</b> ${owed_amt_pdf:,.0f}",
+        styles["Normal"]
+    ))
+    story.append(Spacer(1, 10))
+
+    # Disclosure
     story.append(Paragraph(
         "These figures are <b>estimates</b> and may not reflect 100% accuracy if projections are changed or inputs are inaccurate.",
         styles["Italic"]
@@ -262,14 +293,14 @@ def generate_summary_pdf(base, scen, base_total_tax, scen_total_tax, base_net_du
 # -------------------- PDF BUTTON --------------------
 if st.button("📄 Generate Client PDF Summary"):
     pdf_data = generate_summary_pdf(
-        base, scen, base_total_tax, scen_total_tax, base_net_due, scen_net_due,
+        client_name, base, scen, base_total_tax, scen_total_tax, base_net_due, scen_net_due,
         state, state_rate, strategy_configs
     )
     st.download_button(
         label="Download Tax Strategy Summary PDF",
         data=pdf_data,
-        file_name=f"Tax_Summary_{datetime.now().strftime('%Y%m%d')}.pdf",
+        file_name=f"{client_name.replace(' ', '_')}_Tax_Summary_{datetime.now().strftime('%Y%m%d')}.pdf",
         mime="application/pdf"
     )
 
-st.caption("Amatore & Co © 2025 • Federal + State planner v5.1. Planning tool only; confirm positions before filing.")
+st.caption("Amatore & Co © 2025 • Federal + State planner v5.2. Planning tool only; confirm positions before filing.")
