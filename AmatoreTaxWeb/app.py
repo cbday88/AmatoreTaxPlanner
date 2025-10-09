@@ -13,7 +13,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.utils import ImageReader
 import matplotlib.pyplot as plt
 
-# Your calc engine
+# Your calc engine (unchanged)
 from tax_calculator import Inputs, compute_baseline, compute_scenario
 
 # -------------------- PAGE SETUP --------------------
@@ -24,17 +24,29 @@ if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), use_container_width=True)
 
 st.caption("4010 Boardman-Canfield Rd Unit 1A • Canfield, OH 44406 • (330) 533-0884")
-st.title("Amatore & Co — Tax Planning Calculator v5")
+st.title("Amatore & Co — Tax Planning Calculator v5.1")
 st.caption("Way More Money, Way Less Taxes")
 
 # -------------------- SIDEBAR INPUTS --------------------
 with st.sidebar:
     st.header("Client Inputs")
-    status = st.selectbox("Filing Status", ["MFJ","S","HOH"], index=0)
-    wages = st.number_input("W-2 Wages", 0, 1_000_000, 120_000, 1_000)
-    sch_c = st.number_input("Schedule C Profit", 0, 1_000_000, 60_000, 1_000)
-    other = st.number_input("Other Income", 0, 1_000_000, 5_000, 500)
-    itemized = st.number_input("Itemized Deductions", 0, 1_000_000, 12_000, 500)
+
+    # Filing status
+    status = st.selectbox("Filing Status", ["MFJ", "S", "HOH"], index=0)
+
+    # --- Income entry (more granular) ---
+    st.subheader("Income Details")
+    wages = st.number_input("W-2 Wages", 0, 5_000_000, 120_000, 1_000)
+
+    schc_1099 = st.number_input("1099 / Schedule C Profit (Self-Employment)", 0, 5_000_000, 60_000, 1_000)
+    scorp_k1 = st.number_input("S-Corp K-1 Income", 0, 5_000_000, 0, 1_000)
+    ccorp_div = st.number_input("C-Corp Dividends", 0, 5_000_000, 0, 500)
+    int_income = st.number_input("Interest Income", 0, 5_000_000, 0, 500)
+    div_income = st.number_input("Dividends (total)", 0, 5_000_000, 0, 500)
+    cap_gains  = st.number_input("Capital Gains (net)", 0, 5_000_000, 0, 1_000)
+
+    # Itemized/base deductions (before strategies)
+    itemized = st.number_input("Itemized Deductions (baseline)", 0, 5_000_000, 12_000, 500)
 
     # ----- STATE TAX -----
     st.header("State Tax Selection")
@@ -51,13 +63,13 @@ with st.sidebar:
 
     # ----- PAYMENTS -----
     st.header("Payments & Withholdings")
-    withholdings = st.number_input("Federal Withholding Paid ($)", 0, 1_000_000, 15_000, 500)
-    est_payments = st.number_input("Estimated Payments Made ($)", 0, 1_000_000, 5_000, 500)
+    withholdings = st.number_input("Federal Withholding Paid ($)", 0, 5_000_000, 15_000, 500)
+    est_payments = st.number_input("Estimated Payments Made ($)", 0, 5_000_000, 5_000, 500)
 
     # ----- ENTITY / SCENARIO -----
     st.header("Scenario Setup")
-    s_elect = st.radio("S-Corp Election?", ["No","Yes"], horizontal=True) == "Yes"
-    rc = st.number_input("Reasonable Compensation (if S-Corp)", 0, 1_000_000, 72_000, 1_000)
+    s_elect = st.radio("S-Corp Election? (for the Schedule C/1099 activity above)", ["No", "Yes"], horizontal=True) == "Yes"
+    rc = st.number_input("Reasonable Compensation if S-Corp (W-2 from S-Corp)", 0, 5_000_000, 72_000, 1_000)
 
     # ----- STRATEGIES (custom amount + where to apply) -----
     st.header("Tax Strategies (Customize)")
@@ -76,7 +88,7 @@ with st.sidebar:
         st.markdown(f"**{s}** — {strategy_catalog[s]}")
         col1, col2 = st.columns([2, 2])
         with col1:
-            amt = st.number_input(f"{s} deduction ($)", 0, 1_000_000, 0, 500, key=f"amt_{s}")
+            amt = st.number_input(f"{s} deduction ($)", 0, 5_000_000, 0, 500, key=f"amt_{s}")
         with col2:
             target = st.selectbox(
                 f"Apply {s} against",
@@ -86,26 +98,31 @@ with st.sidebar:
         strategy_configs[s] = {"amount": amt, "target": target}
         st.divider()
 
-# -------------------- APPLY STRATEGIES INTO SCENARIO --------------------
-# Sum by target so we can modify inputs deterministically.
+# -------------------- MAP NEW INCOME FIELDS TO ENGINE --------------------
+# Everything not self-employment is lumped into 'other_income' for the current engine.
+other_income = scorp_k1 + ccorp_div + int_income + div_income + cap_gains
+
+# Strategies: sum per target
 deduct_to_schc = sum(cfg["amount"] for cfg in strategy_configs.values()
                      if cfg["target"].startswith("Schedule C"))
 deduct_to_itemized = sum(cfg["amount"] for cfg in strategy_configs.values()
                          if cfg["target"].startswith("Itemized"))
 
-# Keep non-negative Schedule C after strategy expenses
-sch_c_scen = max(0, sch_c - deduct_to_schc)
-itemized_scen = max(0, itemized + deduct_to_itemized)
+# Apply strategy effects
+sch_c_baseline = schc_1099
+sch_c_scenario = max(0, schc_1099 - deduct_to_schc)
+itemized_baseline = itemized
+itemized_scenario = max(0, itemized + deduct_to_itemized)
 
 # -------------------- RUN CALCULATIONS --------------------
-# Baseline (no strategies, no S-corp)
-inp_base = Inputs(status=status, wages=wages, sch_c=sch_c, other_income=other,
-                  itemized=itemized, s_corp=False)
+# Baseline (no strategies, no S-Corp election)
+inp_base = Inputs(status=status, wages=wages, sch_c=sch_c_baseline, other_income=other_income,
+                  itemized=itemized_baseline, s_corp=False)
 base = compute_baseline(inp_base)
 
-# Scenario (strategies + optional S-corp)
-inp_scen = Inputs(status=status, wages=wages, sch_c=sch_c_scen, other_income=other,
-                  itemized=itemized_scen, s_corp=s_elect, reasonable_comp=rc)
+# Scenario (strategies + optional S-Corp election on the 1099/Sched C)
+inp_scen = Inputs(status=status, wages=wages, sch_c=sch_c_scenario, other_income=other_income,
+                  itemized=itemized_scenario, s_corp=s_elect, reasonable_comp=rc)
 scen = compute_scenario(inp_scen)
 
 # State tax (simple % of taxable income for quick planning)
@@ -120,27 +137,27 @@ base_net_due = base_total_tax - total_paid
 scen_net_due = scen_total_tax - total_paid
 
 # -------------------- DISPLAY --------------------
-df = pd.DataFrame([
+summary_df = pd.DataFrame([
     ["Taxable Income", base["taxable_income"], scen["taxable_income"], scen["taxable_income"] - base["taxable_income"]],
-    ["Federal Tax", base["total_tax"], scen["total_tax"], scen["total_tax"] - base["total_tax"]],
-    ["State Tax", base_state_tax, scen_state_tax, scen_state_tax - base_state_tax],
-    ["QBI Deduction", base["qbi"], scen["qbi"], scen["qbi"] - base["qbi"]],
-    ["SE Tax", base["se_tax"], scen["se_tax"], scen["se_tax"] - base["se_tax"]],
-    ["Total Tax (Fed + State)", base_total_tax, scen_total_tax, scen_total_tax - base_total_tax],
-    ["Net Due / Refund", base_net_due, scen_net_due, scen_net_due - base_net_due]
+    ["Federal Tax",    base["total_tax"],     scen["total_tax"],     scen["total_tax"] - base["total_tax"]],
+    ["State Tax",      base_state_tax,        scen_state_tax,        scen_state_tax - base_state_tax],
+    ["QBI Deduction",  base["qbi"],           scen["qbi"],           scen["qbi"] - base["qbi"]],
+    ["SE Tax",         base["se_tax"],        scen["se_tax"],        scen["se_tax"] - base["se_tax"]],
+    ["Total Tax (Fed + State)", base_total_tax, scen_total_tax,      scen_total_tax - base_total_tax],
+    ["Net Due / Refund",        base_net_due,  scen_net_due,         scen_net_due - base_net_due]
 ], columns=["Metric","Baseline","Scenario","Δ ($)"]).set_index("Metric")
 
 st.subheader("📊 Baseline vs Scenario")
 st.dataframe(
-    df.style.format({"Baseline":"${:,.0f}","Scenario":"${:,.0f}","Δ ($)":"${:,.0f}"}),
+    summary_df.style.format({"Baseline":"${:,.0f}","Scenario":"${:,.0f}","Δ ($)":"${:,.0f}"}),
     use_container_width=True
 )
 
 st.write("---")
 st.metric("Projected Federal + State Savings", f"${base_total_tax - scen_total_tax:,.0f}")
-st.metric("Baseline Total Tax (Fed + State)", f"${base_total_tax:,.0f}")
-st.metric("Scenario Total Tax (Fed + State)", f"${scen_total_tax:,.0f}")
-st.metric("Net Difference After Payments", f"${base_net_due - scen_net_due:,.0f}")
+st.metric("Baseline Total Tax (Fed + State)",  f"${base_total_tax:,.0f}")
+st.metric("Scenario Total Tax (Fed + State)",  f"${scen_total_tax:,.0f}")
+st.metric("Net Difference After Payments",     f"${base_net_due - scen_net_due:,.0f}")
 st.write("---")
 
 # -------------------- PDF GENERATION --------------------
@@ -185,9 +202,9 @@ def generate_summary_pdf(base, scen, base_total_tax, scen_total_tax, base_net_du
     base_state = base["taxable_income"] * state_rate
     scen_state = scen["taxable_income"] * state_rate
     combined_before = base_fed + base_state
-    combined_after = scen_fed + scen_state
-    combined_delta = combined_after - combined_before
-    total_savings = combined_before - combined_after
+    combined_after  = scen_fed + scen_state
+    combined_delta  = combined_after - combined_before
+    total_savings   = combined_before - combined_after
 
     data = [
         ["Category", "Before Strategies", "After Strategies", "Δ ($)"],
@@ -198,10 +215,10 @@ def generate_summary_pdf(base, scen, base_total_tax, scen_total_tax, base_net_du
     table = Table(data, hAlign="LEFT")
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E3A59")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("TEXTCOLOR",  (0, 0), (-1, 0), colors.whitesmoke),
+        ("GRID",       (0, 0), (-1, -1), 0.5, colors.grey),
+        ("ALIGN",      (0, 0), (-1, -1), "CENTER"),
+        ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
     ]))
     story.append(table)
     story.append(Spacer(1, 14))
@@ -255,4 +272,4 @@ if st.button("📄 Generate Client PDF Summary"):
         mime="application/pdf"
     )
 
-st.caption("Amatore & Co © 2025 • Federal + State planner v5. This tool is for planning only; confirm positions before filing.")
+st.caption("Amatore & Co © 2025 • Federal + State planner v5.1. Planning tool only; confirm positions before filing.")
