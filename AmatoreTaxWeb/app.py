@@ -12,8 +12,9 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet
 
-# Your tax engine
+# Your tax engine (must exist in the same folder)
 from tax_calculator import Inputs, compute_baseline, compute_scenario
+
 
 # -------------------- PAGE SETUP --------------------
 st.set_page_config(page_title="Amatore & Co Tax Planner", page_icon="💼", layout="centered")
@@ -21,51 +22,65 @@ LOGO_PATH = Path("amatore_collc_cover.jpg")
 if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), use_container_width=True)
 st.caption("4010 Boardman-Canfield Rd Unit 1A • Canfield, OH 44406 • (330) 533-0884")
-st.title("Amatore & Co — Tax Planning Calculator v7.3")
+st.title("Amatore & Co — Tax Planning Calculator v7.4")
 st.caption("Way More Money, Way Less Taxes")
 
-# -------------------- STRATEGIES CATALOG --------------------
+
+# -------------------- STRATEGY CATALOG --------------------
 strategy_catalog = {
     "Augusta Rule": {
         "type": "custom_augusta",
-        "desc": "Tax-free home rental to your entity up to 14 days/year; entity deducts FMV rent.",
-        "irs": [{"label":"IRC §280A(g)","url":"https://www.law.cornell.edu/uscode/text/26/280A"}],
-        "actions": ["Document business purpose + minutes.", "Support FMV (3+ comps).", "Pay from entity to owner."]
+        "desc": "Tax-free home rental to your entity (≤14 days/year); entity deducts FMV rent.",
+        "irs": [{"label": "IRC §280A(g)", "url": "https://www.law.cornell.edu/uscode/text/26/280A"}],
+        "actions": ["Document business purpose & minutes.", "Support FMV with ≥3 comps.", "Pay from entity to owner."]
     },
     "Cost Segregation": {
         "type": "deduction_sc",
         "desc": "Accelerate depreciation (often with bonus/§179).",
         "irs": [
-            {"label":"IRS Cost Seg ATG","url":"https://www.irs.gov/businesses/small-businesses-self-employed/cost-segregation-audit-techniques-guide"},
-            {"label":"IRC §168 (MACRS)","url":"https://www.law.cornell.edu/uscode/text/26/168"}
+            {"label": "IRS Cost Seg ATG", "url": "https://www.irs.gov/businesses/small-businesses-self-employed/cost-segregation-audit-techniques-guide"},
+            {"label": "IRC §168 (MACRS)", "url": "https://www.law.cornell.edu/uscode/text/26/168"},
         ],
-        "actions": ["Order benefits analysis.", "Engineer study + docs.", "File Form 3115 if needed."]
+        "actions": ["Order benefits analysis.", "Engineer study & report.", "File Form 3115 if applicable."]
     },
     "Oil & Gas Investment": {
         "type": "deduction_sc",
-        "desc": "Deductible IDCs; depletion thereafter (where eligible).",
+        "desc": "Deductible IDCs; depletion thereafter, subject to limits.",
         "irs": [
-            {"label":"IRC §263(c) (IDCs)","url":"https://www.law.cornell.edu/uscode/text/26/263"},
-            {"label":"Depletion §§611–613","url":"https://www.law.cornell.edu/uscode/text/26/611"}
+            {"label": "IRC §263(c) (IDCs)", "url": "https://www.law.cornell.edu/uscode/text/26/263"},
+            {"label": "Depletion §§611–613", "url": "https://www.law.cornell.edu/uscode/text/26/611"},
         ],
-        "actions": ["Review PPM/suitability.", "Track IDC vs tangible.", "Monitor K-1 and depletion."],
+        "actions": ["Review PPM & suitability.", "Track IDC vs tangible.", "Monitor K-1 & depletion."],
         "investment": True
     },
-    "Accountable Plan": {"type":"deduction_sc","desc":"Reimburse substantiated expenses; non-taxable to recipient, deductible to business.",
-                         "irs":[{"label":"Pub 463 – Travel, Gift, Car","url":"https://www.irs.gov/publications/p463"}],
-                         "actions":["Written plan.","Collect receipts.","Timely reimbursements."]},
-    "Equipment Leasing": {"type":"deduction_sc","desc":"Lease payments for business-use equipment are deductible.",
-                          "irs":[{"label":"Pub 535 – Business Expenses","url":"https://www.irs.gov/publications/p535"}],
-                          "actions":["Maintain lease.","Track business-use %."]},
-    "Donor Advised Fund": {"type":"deduction_itemized","desc":"Charitable contribution via DAF; AGI limits apply.",
-                           "irs":[{"label":"Pub 526 – Charitable Contributions","url":"https://www.irs.gov/publications/p526"}],
-                           "actions":["Written acknowledgement.","Mind AGI limits/carryforwards."]},
-    "Roth IRA Conversion": {"type":"income_increase","desc":"Convert pre-tax IRA to Roth; adds ordinary income now.",
-                            "irs":[{"label":"Pub 590-A","url":"https://www.irs.gov/publications/p590a"}],
-                            "actions":["Model bracket fill.","Watch IRMAA/phaseouts."]}
+    "Accountable Plan": {
+        "type": "deduction_sc",
+        "desc": "Reimburse substantiated expenses; deductible to business, non-taxable to employee/owner.",
+        "irs": [{"label": "Pub 463 – Travel, Gift, Car", "url": "https://www.irs.gov/publications/p463"}],
+        "actions": ["Written plan.", "Collect receipts.", "Timely reimbursements."]
+    },
+    "Equipment Leasing": {
+        "type": "deduction_sc",
+        "desc": "Lease payments for business-use equipment are deductible.",
+        "irs": [{"label": "Pub 535 – Business Expenses", "url": "https://www.irs.gov/publications/p535"}],
+        "actions": ["Maintain lease.", "Track business-use %."]
+    },
+    "Donor Advised Fund": {
+        "type": "deduction_itemized",
+        "desc": "Charitable contribution via DAF; AGI limits may apply.",
+        "irs": [{"label": "Pub 526 – Charitable Contributions", "url": "https://www.irs.gov/publications/p526"}],
+        "actions": ["Get written acknowledgement.", "Mind AGI limits & carryforwards."]
+    },
+    "Roth IRA Conversion": {
+        "type": "income_increase",
+        "desc": "Convert pre-tax IRA to Roth; adds ordinary income now.",
+        "irs": [{"label": "Pub 590-A", "url": "https://www.irs.gov/publications/p590a"}],
+        "actions": ["Model bracket fill.", "Watch IRMAA/phaseouts/credits."]
+    },
 }
 
-# -------------------- SIDEBAR (EMPTY DEFAULTS) --------------------
+
+# -------------------- SIDEBAR --------------------
 with st.sidebar:
     st.header("Client")
     client_name = st.text_input("Client Name (shown on PDF)", value="")
@@ -107,13 +122,13 @@ with st.sidebar:
         state_rate = 0.0  # when "— Select —"
 
     st.header("Payments & Withholdings")
-    fed_withhold = st.number_input("Federal Withholding Paid ($)", 0, 5_000_000, 0, 500)
+    fed_withhold  = st.number_input("Federal Withholding Paid ($)", 0, 5_000_000, 0, 500)
     fed_estimates = st.number_input("Federal Estimated Payments ($)", 0, 5_000_000, 0, 500)
-    st_withhold = st.number_input("State Withholding Paid ($)", 0, 5_000_000, 0, 500)
-    st_estimates = st.number_input("State Estimated Payments ($)", 0, 5_000_000, 0, 500)
+    st_withhold   = st.number_input("State Withholding Paid ($)", 0, 5_000_000, 0, 500)
+    st_estimates  = st.number_input("State Estimated Payments ($)", 0, 5_000_000, 0, 500)
 
     st.header("Scenario Setup")
-    s_elect = st.radio("S-Corp Election? (for the Schedule C activity)", ["No", "Yes"], horizontal=True) == "Yes"
+    s_elect = st.radio("S-Corp Election? (for the Schedule C activity)", ["No","Yes"], horizontal=True) == "Yes"
     rc = st.number_input("Reasonable Compensation if S-Corp (W-2 from S-Corp)", 0, 5_000_000, 0, 1_000)
 
     st.header("Strategies (Select & Configure)")
@@ -129,7 +144,7 @@ with st.sidebar:
                 fmv_day = st.number_input("FMV / day ($)", 0, 1_000_000_000, 0, 50, key=f"fmv_{s}")
             with c2:
                 days = st.number_input("Days (max 14)", 0, 14, 0, 1, key=f"days_{s}")
-            amount = min(14, days) * fmv_day  # uncapped FMV (per your request)
+            amount = min(14, days) * fmv_day  # uncapped FMV per your request; days realistically capped at 14
             with c3:
                 entity = st.selectbox(
                     "Entity receiving the Augusta deduction",
@@ -180,6 +195,7 @@ with st.sidebar:
     manual_marginal_rate = st.number_input("Manual marginal rate (%)", 0.0, 100.0, 0.0, 0.1, disabled=auto_marginal)/100
     corp_rate = st.number_input("Corporate rate for C-Corp Augusta (%)", 0.0, 100.0, 21.0, 0.1)/100
 
+
 # -------------------- GUARD: ONLY CALCULATE WHEN THERE'S INPUT --------------------
 income_sum = wages + schc_1099 + scorp_k1 + partner_k1 + qdiv_income + odiv_income + int_income + cap_gains
 strategy_sum = sum(float(cfg.get("amount") or 0) for cfg in strategy_configs.values()) if strategy_configs else 0.0
@@ -189,69 +205,76 @@ if not has_data:
     st.info("👋 Enter income, deductions, or strategy amounts in the sidebar to begin. Nothing is calculated until you add numbers.")
     st.stop()
 
-# Normalize to avoid negative Schedule C due to large deductions in UI
-def nonneg(x): 
-    return max(0.0, float(x or 0))
 
 # ------------------------------------------------------------------
 # 1) BASELINE (***NO STRATEGIES APPLIED***)
 # ------------------------------------------------------------------
 other_income_base = qdiv_income + odiv_income + int_income + cap_gains
 
+# Baseline = no strategies; S-corp election OFF for the baseline
 inp_base = Inputs(
     status=status,
     wages=wages,
     sch_c=schc_1099,
-    other_income=other_income_base + scorp_k1 + partner_k1,  # pipe K-1s through other_income for engine
+    other_income=other_income_base + scorp_k1 + partner_k1,
     itemized=itemized,
     s_corp=False
 )
 base = compute_baseline(inp_base)
 
+
 # ------------------------------------------------------------------
 # 2) APPLY STRATEGIES to build the SCENARIO INPUTS
 # ------------------------------------------------------------------
+# Start from baseline buckets
 sched_c = schc_1099
-k1_s = scorp_k1
-k1_p = partner_k1
+k1_s    = scorp_k1
+k1_p    = partner_k1
 other_income_baseline = other_income_base
 deduct_itemized_total = 0.0
-add_other_income = 0.0
-augusta_entity_note = None
-c_corp_aug_tax_savings = 0.0
+add_other_income      = 0.0
+augusta_entity_note   = None
+c_corp_aug_tax_savings = 0.0  # displayed as note; not counted in personal savings
 
 for name, cfg in strategy_configs.items():
     amt = float(cfg.get("amount") or 0)
-    typ = cfg["type"]
     if amt <= 0:
         continue
+    typ = cfg["type"]
+
     if typ == "custom_augusta":
         ent = cfg.get("entity", "S-Corp (1120S)")
+        # ALLOW NEGATIVE (no clamping): pass-through losses are real & should flow
         if ent.startswith("S-Corp"):
-            k1_s = nonneg(scorp_k1 - amt)
-            augusta_entity_note = "Applied to S-Corp (reduces K-1 income)."
+            k1_s = scorp_k1 - amt
+            augusta_entity_note = "Augusta: Applied to S-Corp (reduces K-1 income)."
         elif ent.startswith("Partnership"):
-            k1_p = nonneg(partner_k1 - amt)
-            augusta_entity_note = "Applied to Partnership (reduces K-1 income)."
+            k1_p = partner_k1 - amt
+            augusta_entity_note = "Augusta: Applied to Partnership (reduces K-1 income)."
         elif ent.startswith("Schedule C"):
-            sched_c = nonneg(schc_1099 - amt)
-            augusta_entity_note = "Applied to Schedule C (reduces business profit)."
-        else:  # C-Corp
+            sched_c = schc_1099 - amt
+            augusta_entity_note = "Augusta: Applied to Schedule C (reduces business profit)."
+        else:  # C-Corp (entity level only)
             c_corp_aug_tax_savings = amt * corp_rate
-            augusta_entity_note = f"Applied to C-Corp (entity-level deduction; shown @ {corp_rate*100:.1f}%)."
+            augusta_entity_note = f"Augusta: Applied to C-Corp (entity-level deduction, ~{corp_rate*100:.1f}% savings)."
+
     elif typ == "deduction_sc":
+        # Can direct to Schedule C or Itemized (via 'target' control)
         if cfg.get("target","").startswith("Schedule"):
-            sched_c = nonneg(sched_c - amt)
+            sched_c = sched_c - amt   # allow negative; if you want to clamp, do it here
         else:
             deduct_itemized_total += amt
+
     elif typ == "deduction_itemized":
         deduct_itemized_total += amt
+
     elif typ == "income_increase":
         add_other_income += amt
 
 itemized_base = itemized
 itemized_scen = max(0.0, itemized + deduct_itemized_total)
-other_income_scen_only = other_income_baseline + add_other_income  # add K-1s next
+other_income_scen_only = other_income_baseline + add_other_income  # add K-1s later
+
 
 # ------------------------------------------------------------------
 # 3) SCENARIO (AFTER STRATEGIES)
@@ -266,6 +289,7 @@ inp_scen = Inputs(
     reasonable_comp=rc
 )
 scen = compute_scenario(inp_scen)
+
 
 # -------------------- STATE TAX + TOTALS --------------------
 base_state_tax = max(0.0, base["taxable_income"] * state_rate)
@@ -286,8 +310,9 @@ total_paid = (fed_withhold + fed_estimates + st_withhold + st_estimates)
 base_net_due = base_total_tax - total_paid
 scen_net_due = scen_total_tax - total_paid
 
-# Projected Savings (headline) = pure liability reduction
+# Projected Savings headline = pure liability reduction
 projected_savings = max(0.0, base_total_tax - scen_total_tax)
+
 
 # -------------------- MARGINAL-RATE ENGINE (uses BASELINE buckets) --------------------
 def combined_tax(i: Inputs) -> float:
@@ -295,7 +320,7 @@ def combined_tax(i: Inputs) -> float:
     return max(0.0, s["total_tax"]) + max(0.0, s["taxable_income"] * state_rate)
 
 def marginal_rate_for_bucket(bucket: str, bump: float = 1000.0) -> float:
-    """Buckets: 'SC','K1S','K1P','ITEMIZED'."""
+    """Buckets: 'SC','K1S','K1P','ITEMIZED' — computed around the baseline."""
     if bucket == "ITEMIZED":
         i0 = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_base + scorp_k1 + partner_k1,
                     itemized=itemized_base, s_corp=s_elect, reasonable_comp=rc)
@@ -323,7 +348,7 @@ def marginal_rate_for_bucket(bucket: str, bump: float = 1000.0) -> float:
     t1 = combined_tax(i1)
     return max(0.0, (t1 - t0) / bump)
 
-# Theoretical savings per strategy
+# Theoretical savings per strategy (info only)
 per_strategy_theoretical = {}
 if show_theoretical:
     for name, cfg in strategy_configs.items():
@@ -358,9 +383,10 @@ if show_theoretical:
                 per_strategy_theoretical[name] = 0.0
 total_theoretical = sum(v for v in per_strategy_theoretical.values() if v > 0)
 
+
 # -------------------- PER-STRATEGY (ACTUAL, one-by-one) on BASELINE --------------------
 def tax_with_subset(active_keys):
-    # Start from BASELINE buckets (no strategies), then add only those in 'active_keys'
+    # Start from BASELINE buckets (no strategies), then apply only those in 'active_keys'
     sc = schc_1099
     k1s = scorp_k1
     k1p = partner_k1
@@ -375,13 +401,13 @@ def tax_with_subset(active_keys):
         typ = cfg["type"]
         if typ == "custom_augusta":
             ent = cfg.get("entity","S-Corp (1120S)")
-            if ent.startswith("S-Corp"):        k1s = nonneg(scorp_k1 - amt)
-            elif ent.startswith("Partnership"): k1p = nonneg(partner_k1 - amt)
-            elif ent.startswith("Schedule C"):  sc  = nonneg(schc_1099 - amt)
+            if ent.startswith("S-Corp"):        k1s = scorp_k1 - amt   # allow negative
+            elif ent.startswith("Partnership"): k1p = partner_k1 - amt # allow negative
+            elif ent.startswith("Schedule C"):  sc  = schc_1099 - amt  # allow negative
             else:                               ...
         elif typ == "deduction_sc":
             tgt = cfg.get("target","")
-            if tgt.startswith("Schedule"):       sc = nonneg(schc_1099 - amt)
+            if tgt.startswith("Schedule"):       sc = schc_1099 - amt  # allow negative
             else:                                it = itemized + amt
         elif typ == "deduction_itemized":
             it = itemized + amt
@@ -396,7 +422,7 @@ def tax_with_subset(active_keys):
     return max(0.0, s["total_tax"]) + max(0.0, s["taxable_income"] * state_rate)
 
 combined_before = base_total_tax
-combined_after = scen_total_tax
+combined_after  = scen_total_tax
 
 per_strategy_actual = {}
 for k, cfg in strategy_configs.items():
@@ -438,6 +464,7 @@ def shapley_attribution(strategy_configs, n_perm=200):
 
 shap_contrib, shap_total = shapley_attribution(strategy_configs, n_perm=200)
 
+
 # -------------------- DISPLAY --------------------
 summary_df = pd.DataFrame([
     ["Total Income",   base_total_income,     scen_total_income,     scen_total_income - base_total_income],
@@ -454,14 +481,13 @@ st.subheader("📊 Before vs After")
 st.dataframe(summary_df.style.format({"Baseline":"${:,.0f}","Scenario":"${:,.0f}","Change":"${:,.0f}"}),
              use_container_width=True)
 
-# Big headline number (TAX savings only)
+# Headline savings
 st.write("---")
 st.markdown(
     f"<div style='font-size:22px;'>Projected Savings (Federal + State Tax): "
     f"<b><span style='color:#1a7f37;'>${projected_savings:,.0f}</span></b></div>",
     unsafe_allow_html=True
 )
-
 if show_theoretical and total_theoretical > 0:
     st.markdown(
         f"<div style='font-size:14px;opacity:0.85;'>Theoretical (marginal-rate) savings (informational): "
@@ -469,7 +495,7 @@ if show_theoretical and total_theoretical > 0:
         unsafe_allow_html=True
     )
 
-# Refund / Due
+# Refund / Due after payments
 owed_or_refund = "Estimated Refund" if scen_net_due < 0 else "Estimated Amount Due"
 owed_amt = abs(scen_net_due)
 st.markdown(
@@ -477,7 +503,7 @@ st.markdown(
     f"${owed_amt:,.0f}</div>", unsafe_allow_html=True
 )
 if augusta_entity_note:
-    st.caption(f"Augusta modeling note: {augusta_entity_note}")
+    st.caption(augusta_entity_note)
 
 # ----- Income Chart (Total vs Taxable, before/after) -----
 st.write("---")
@@ -607,6 +633,7 @@ with st.expander("🔎 Diagnostics (internal)"):
         "Itemized deductions": _safe_rate("ITEMIZED", lambda: marginal_rate_for_bucket("ITEMIZED"))
     })
 
+
 # -------------------- PDF --------------------
 def generate_summary_pdf(
     client_name,
@@ -624,7 +651,7 @@ def generate_summary_pdf(
     styles = getSampleStyleSheet()
     story = []
 
-    # Page 1
+    # Page 1 — Summary
     if LOGO_PATH.exists():
         story.append(Image(str(LOGO_PATH), width=6.5*72, height=1.5*72, hAlign='CENTER'))
         story.append(Spacer(1, 12))
@@ -656,13 +683,11 @@ def generate_summary_pdf(
     story.append(table)
     story.append(Spacer(1, 8))
 
-    # Income chart
     if income_chart_path:
         story.append(Paragraph("<b>Total vs Taxable Income</b>", styles["Heading3"]))
         story.append(Image(income_chart_path, width=460, height=230, hAlign='CENTER'))
         story.append(Spacer(1, 6))
 
-    # Savings chart
     if savings_chart_path:
         story.append(Paragraph("<b>Savings by Strategy (Actual)</b>", styles["Heading3"]))
         story.append(Image(savings_chart_path, width=460, height=230, hAlign='CENTER'))
@@ -687,7 +712,7 @@ def generate_summary_pdf(
         ))
     story.append(PageBreak())
 
-    # Page 2 — Strategy details + Shapley
+    # Page 2 — Strategy details + IRS links + Shapley
     story.append(Paragraph("<b>Strategies Used — Details & References</b>", styles["Heading1"]))
     story.append(Spacer(1, 6))
 
@@ -727,7 +752,6 @@ def generate_summary_pdf(
         story.append(Paragraph("No strategies entered.", styles["Italic"]))
         story.append(Spacer(1, 8))
 
-    # Shapley (fair) table
     if shap_df is not None and not shap_df.empty:
         story.append(Spacer(1, 6))
         story.append(Paragraph("<b>Fair Attribution (Shapley)</b>", styles["Heading2"]))
@@ -785,4 +809,4 @@ if st.button("📄 Generate Client PDF Summary"):
         mime="application/pdf"
     )
 
-st.caption("Amatore & Co © 2025 • Federal + State planner v7.3. Planning tool only; confirm positions before filing.")
+st.caption("Amatore & Co © 2025 • Federal + State planner v7.4. Planning tool only; confirm positions before filing.")
