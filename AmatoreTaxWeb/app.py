@@ -5,17 +5,14 @@ from io import BytesIO
 from datetime import datetime
 import tempfile
 
-# PDF + chart libs
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet
 import matplotlib.pyplot as plt
 
-# Calc engine (your existing module)
 from tax_calculator import Inputs, compute_baseline, compute_scenario
 
-# -------------------- PAGE SETUP --------------------
 st.set_page_config(page_title="Amatore & Co Tax Planner", page_icon="💼", layout="centered")
 
 LOGO_PATH = Path("amatore_collc_cover.jpg")
@@ -23,15 +20,10 @@ if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), use_container_width=True)
 
 st.caption("4010 Boardman-Canfield Rd Unit 1A • Canfield, OH 44406 • (330) 533-0884")
-st.title("Amatore & Co — Tax Planning Calculator v6.4")
+st.title("Amatore & Co — Tax Planning Calculator v6.5")
 st.caption("Way More Money, Way Less Taxes")
 
-# -------------------- STRATEGY DEFINITIONS --------------------
-# Strategy 'type' meanings:
-#  - 'custom_augusta'  : handled specially (FMV/day * days, <=14) applied to a selected entity
-#  - 'deduction_sc'    : business deduction (reduces Schedule C)
-#  - 'deduction_itemized' : itemized deduction (below-the-line)
-#  - 'income_increase' : increases 'other income' (e.g., Roth conversion)
+# -------------------- STRATEGIES --------------------
 strategy_catalog = {
     "Augusta Rule": {
         "type": "custom_augusta",
@@ -49,7 +41,7 @@ strategy_catalog = {
         "actions": ["Order benefits analysis.", "Engineer study + docs.", "File Form 3115 if needed."]
     },
     "Oil & Gas Investment": {
-        "type": "deduction_sc",  # model IDC as business expense in MVP
+        "type": "deduction_sc",
         "desc": "Deductible IDCs; depletion thereafter (where eligible).",
         "irs": [
             {"label":"IRC §263(c) (IDCs)","url":"https://www.law.cornell.edu/uscode/text/26/263"},
@@ -58,7 +50,6 @@ strategy_catalog = {
         "actions": ["Review PPM/suitability.", "Track IDC vs tangible.", "Monitor K-1 and depletion."],
         "investment": True
     },
-    # A few common modeled deductions:
     "Accountable Plan": {"type":"deduction_sc","desc":"Reimburse substantiated expenses; non-taxable to recipient, deductible to business.",
                          "irs":[{"label":"Pub 463 – Travel, Gift, Car","url":"https://www.irs.gov/publications/p463"}],
                          "actions":["Written plan.","Collect receipts.","Timely reimbursements."]},
@@ -73,7 +64,7 @@ strategy_catalog = {
                             "actions":["Model bracket fill.","Watch IRMAA/phaseouts."]}
 }
 
-# -------------------- SIDEBAR INPUTS --------------------
+# -------------------- SIDEBAR --------------------
 with st.sidebar:
     st.header("Client")
     client_name = st.text_input("Client Name (shown on PDF)", value="Amatore Client")
@@ -81,7 +72,6 @@ with st.sidebar:
     st.header("Filing Status")
     status = st.selectbox("Status", ["MFJ", "S", "HOH"], index=0)
 
-    # Income
     st.subheader("Income Details")
     wages = st.number_input("W-2 Wages", 0, 5_000_000, 120_000, 1_000)
     schc_1099 = st.number_input("1099 / Schedule C Profit (Self-Employment)", 0, 5_000_000, 60_000, 1_000)
@@ -91,10 +81,8 @@ with st.sidebar:
     odiv_income = st.number_input("Ordinary Dividends",  0, 5_000_000, 0, 500)
     int_income  = st.number_input("Interest Income",     0, 5_000_000, 0, 500)
     cap_gains   = st.number_input("Capital Gains (net)", 0, 5_000_000, 0, 1_000)
-
     itemized = st.number_input("Itemized Deductions (baseline)", 0, 5_000_000, 12_000, 500)
 
-    # State
     st.header("State Tax")
     states = {
         "Ohio": 0.035, "Pennsylvania": 0.0307, "Florida": 0.0,
@@ -102,24 +90,19 @@ with st.sidebar:
         "Illinois": 0.0495, "Other (custom)": 0.050
     }
     state = st.selectbox("Select State", list(states.keys()), index=0)
-    if state == "Other (custom)":
-        state_rate = st.number_input("Custom State Tax Rate (%)", 0.0, 15.0, 5.0, 0.1) / 100
-    else:
-        state_rate = states[state]
+    state_rate = (st.number_input("Custom State Tax Rate (%)", 0.0, 15.0, 5.0, 0.1)/100
+                  if state == "Other (custom)" else states[state])
 
-    # Payments (now split Fed/State)
     st.header("Payments & Withholdings")
     fed_withhold = st.number_input("Federal Withholding Paid ($)", 0, 5_000_000, 15_000, 500)
     fed_estimates = st.number_input("Federal Estimated Payments ($)", 0, 5_000_000, 5_000, 500)
     st_withhold = st.number_input("State Withholding Paid ($)", 0, 5_000_000, 0, 500)
     st_estimates = st.number_input("State Estimated Payments ($)", 0, 5_000_000, 0, 500)
 
-    # Entity toggle
     st.header("Scenario Setup")
     s_elect = st.radio("S-Corp Election? (for the Schedule C activity)", ["No", "Yes"], horizontal=True) == "Yes"
     rc = st.number_input("Reasonable Compensation if S-Corp (W-2 from S-Corp)", 0, 5_000_000, 72_000, 1_000)
 
-    # Strategies
     st.header("Strategies (Select & Configure)")
     chosen = st.multiselect(
         "Select strategies to model",
@@ -132,13 +115,12 @@ with st.sidebar:
         meta = strategy_catalog[s]
         st.markdown(f"**{s}** — {meta['desc']}")
         if meta["type"] == "custom_augusta":
-            # Single Augusta input; choose entity recipient
             c1, c2, c3 = st.columns([1.2, 1.2, 1.6])
             with c1:
-                fmv_day = st.number_input("FMV / day ($)", 0, 100_000, 600, 50, key=f"fmv_{s}")
+                fmv_day = st.number_input("FMV / day ($)", 0, 100_000_000, 600, 50, key=f"fmv_{s}")
             with c2:
                 days = st.number_input("Days (max 14)", 0, 14, 10, 1, key=f"days_{s}")
-            amount = min(14, days) * fmv_day
+            amount = min(14, days) * fmv_day  # no FMV cap per your request
             with c3:
                 entity = st.selectbox(
                     "Entity receiving the Augusta deduction",
@@ -158,15 +140,13 @@ with st.sidebar:
             c1, c2 = st.columns([1.3, 1.7])
             with c1:
                 amount = st.number_input(f"{s} amount ($)", 0, 5_000_000, 0, 500, key=f"amt_{s}")
-            # Choose where typical deduction applies (business vs itemized) or income add
-            default_target = "Schedule C (reduces business profit)" if meta["type"] == "deduction_sc" else \
-                             "Itemized deductions (below-the-line)"
-            choices = ["Schedule C (reduces business profit)", "Itemized deductions (below-the-line)"]
+            target_choices = ["Schedule C (reduces business profit)", "Itemized deductions (below-the-line)"] \
+                             if meta["type"] != "income_increase" else ["Increase Other Income"]
             with c2:
                 target = st.selectbox(
                     f"Apply {s}",
-                    choices if meta["type"] != "income_increase" else ["Increase Other Income"],
-                    index=0 if meta["type"] == "deduction_sc" else 1,
+                    target_choices,
+                    index=0 if meta["type"] == "deduction_sc" else 1 if meta["type"] == "deduction_itemized" else 0,
                     key=f"tgt_{s}"
                 )
             invest_amt, invest_roi = 0.0, 0.0
@@ -185,26 +165,28 @@ with st.sidebar:
             }
         st.divider()
 
+    st.header("Marginal Rate Modeling")
+    show_theoretical = st.checkbox("Show theoretical (marginal-rate) savings", value=True)
+    auto_marginal = st.checkbox("Use automatic marginal rate (recommended)", value=True)
+    manual_marginal_rate = st.number_input("Manual marginal rate (%)", 0.0, 100.0, 35.0, 0.1, disabled=auto_marginal)/100
+    corp_rate = st.number_input("Corporate rate for C-Corp Augusta (%)", 0.0, 100.0, 21.0, 0.1)/100
+
 # -------------------- MAP INCOME + STRATEGIES --------------------
-# Start with raw buckets
 sched_c = schc_1099
 k1_s = scorp_k1
 k1_p = partner_k1
 other_income_base = qdiv_income + odiv_income + int_income + cap_gains
 
-# Apply strategies into buckets
 deduct_itemized_total = 0.0
 add_other_income = 0.0
 augusta_entity_note = None
-c_corp_aug_tax_savings = 0.0  # informational only
+c_corp_aug_tax_savings = 0.0
 
 for name, cfg in strategy_configs.items():
     amt = float(cfg.get("amount") or 0)
     typ = cfg["type"]
-
     if typ == "custom_augusta":
         ent = cfg.get("entity", "S-Corp (1120S)")
-        # Apply as business deduction to the selected entity
         if ent.startswith("S-Corp"):
             k1_s -= amt
             augusta_entity_note = "Applied to S-Corp (reduces K-1 income)."
@@ -214,61 +196,35 @@ for name, cfg in strategy_configs.items():
         elif ent.startswith("Schedule C"):
             sched_c -= amt
             augusta_entity_note = "Applied to Schedule C (reduces business profit)."
-        else:  # C-Corp (1120)
-            # Does not pass through to individual. Show estimated corporate tax savings @ 21% informationally.
-            c_corp_aug_tax_savings = amt * 0.21
-            augusta_entity_note = "Applied to C-Corp (entity-level deduction; shown as corp tax savings @ 21%)."
+        else:  # C-Corp
+            c_corp_aug_tax_savings = amt * corp_rate
+            augusta_entity_note = f"Applied to C-Corp (entity-level deduction; shown @ {corp_rate*100:.1f}%)."
     elif typ == "deduction_sc":
-        tgt = cfg.get("target", "")
-        if tgt.startswith("Schedule"):
+        if cfg.get("target","").startswith("Schedule"):
             sched_c -= amt
         else:
             deduct_itemized_total += amt
     elif typ == "deduction_itemized":
         deduct_itemized_total += amt
     elif typ == "income_increase":
-        # e.g., Roth conversion
         add_other_income += amt
 
-# Build final inputs
 itemized_base = itemized
 itemized_scen = max(0.0, itemized + deduct_itemized_total)
-
-# Other income rolls all non-SE items + any income increases (Roth, etc.)
+other_income_baseline = other_income_base
 other_income_scen = other_income_base + add_other_income
-other_income_baseline = other_income_base  # for baseline comparison
 
 # -------------------- BASELINE & SCENARIO --------------------
-# Baseline uses original buckets
-inp_base = Inputs(
-    status=status,
-    wages=wages,
-    sch_c=sched_c + 0.0 + (0.0 if deduct_itemized_total or add_other_income else 0.0) - 0.0 + (0.0),  # sched_c BEFORE strategy? No: baseline must be original schc_1099
-    other_income=other_income_baseline,
-    itemized=itemized_base,
-    s_corp=False
-)
-# Fix: baseline must reflect PRE-strategy amounts
-inp_base.sch_c = schc_1099
+inp_base = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_baseline, itemized=itemized_base, s_corp=False)
 base = compute_baseline(inp_base)
 
-# Scenario uses adjusted buckets + optional S-Corp election on Schedule C activity
-inp_scen = Inputs(
-    status=status,
-    wages=wages,
-    sch_c=sched_c,                   # after business deductions incl. Augusta to Schedule C (if chosen)
-    other_income=other_income_scen + k1_s + k1_p,  # K-1s included here (after Augusta to K-1 if chosen)
-    itemized=itemized_scen,
-    s_corp=s_elect,
-    reasonable_comp=rc
-)
+inp_scen = Inputs(status=status, wages=wages, sch_c=sched_c, other_income=other_income_scen + k1_s + k1_p,
+                  itemized=itemized_scen, s_corp=s_elect, reasonable_comp=rc)
 scen = compute_scenario(inp_scen)
 
-# -------------------- STATE TAX (non-negative) --------------------
 base_state_tax = max(0.0, base["taxable_income"] * state_rate)
 scen_state_tax = max(0.0, scen["taxable_income"] * state_rate)
 
-# -------------------- TOTALS & NET --------------------
 base_fed_tax = max(0.0, base["total_tax"])
 scen_fed_tax = max(0.0, scen["total_tax"])
 
@@ -278,9 +234,90 @@ scen_total_tax = scen_fed_tax + scen_state_tax
 total_paid = (fed_withhold + fed_estimates + st_withhold + st_estimates)
 base_net_due = base_total_tax - total_paid
 scen_net_due = scen_total_tax - total_paid
-net_savings = base_total_tax - scen_total_tax
+net_savings_actual = base_total_tax - scen_total_tax  # actual liability reduction
 
-# -------------------- PER-STRATEGY SAVINGS (one-by-one) --------------------
+# -------------------- AUTOMATIC MARGINAL RATE ENGINE --------------------
+def combined_tax(i: Inputs) -> float:
+    s = compute_scenario(i)
+    return max(0.0, s["total_tax"]) + max(0.0, s["taxable_income"] * state_rate)
+
+def marginal_rate_for_bucket(bucket: str, bump: float = 1000.0) -> float:
+    """
+    Computes effective marginal rate for increasing a specific income bucket by +bump.
+    Buckets: 'SC' (Schedule C), 'K1S', 'K1P', 'ITEMIZED' (deduction value per $).
+    Uses baseline inputs (pre-strategy) but respects the S-Corp toggle for Schedule C.
+    """
+    if bucket == "ITEMIZED":
+        i0 = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_baseline,
+                    itemized=itemized_base, s_corp=s_elect, reasonable_comp=rc)
+        t0 = combined_tax(i0)
+        i1 = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_baseline,
+                    itemized=itemized_base + bump, s_corp=s_elect, reasonable_comp=rc)
+        t1 = combined_tax(i1)
+        # value of a deduction is (t0 - t1)/bump
+        return max(0.0, (t0 - t1) / bump)
+
+    # Income buckets:
+    i0 = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_baseline + scorp_k1 + partner_k1,
+                itemized=itemized_base, s_corp=s_elect, reasonable_comp=rc)
+    t0 = combined_tax(i0)
+
+    if bucket == "SC":
+        i1 = Inputs(status=status, wages=wages, sch_c=schc_1099 + bump, other_income=other_income_baseline + scorp_k1 + partner_k1,
+                    itemized=itemized_base, s_corp=s_elect, reasonable_comp=rc)
+    elif bucket == "K1S":
+        i1 = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_baseline + scorp_k1 + partner_k1 + bump,
+                    itemized=itemized_base, s_corp=s_elect, reasonable_comp=rc)
+    elif bucket == "K1P":
+        i1 = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_baseline + scorp_k1 + partner_k1 + bump,
+                    itemized=itemized_base, s_corp=s_elect, reasonable_comp=rc)
+    else:
+        return 0.0
+
+    t1 = combined_tax(i1)
+    return max(0.0, (t1 - t0) / bump)
+
+# Per-strategy THEORETICAL savings map (marginal × amount)
+per_strategy_theoretical = {}
+
+if show_theoretical:
+    for name, cfg in strategy_configs.items():
+        amt = float(cfg.get("amount") or 0)
+        if amt <= 0:
+            per_strategy_theoretical[name] = 0.0
+            continue
+
+        if name == "Augusta Rule":
+            ent = cfg.get("entity","S-Corp (1120S)")
+            if "C-Corp" in ent:
+                mrate = corp_rate  # corporate only
+            elif "S-Corp" in ent:
+                mrate = marginal_rate_for_bucket("K1S") if auto_marginal else manual_marginal_rate
+            elif "Partnership" in ent:
+                mrate = marginal_rate_for_bucket("K1P") if auto_marginal else manual_marginal_rate
+            else:  # Schedule C
+                # Schedule C includes SE/QBI effects via your engine
+                mrate = marginal_rate_for_bucket("SC") if auto_marginal else manual_marginal_rate
+            per_strategy_theoretical[name] = amt * mrate
+
+        else:
+            typ = cfg["type"]
+            if typ == "deduction_sc":
+                mrate = marginal_rate_for_bucket("SC") if auto_marginal else manual_marginal_rate
+                per_strategy_theoretical[name] = amt * mrate
+            elif typ == "deduction_itemized":
+                mrate = marginal_rate_for_bucket("ITEMIZED") if auto_marginal else manual_marginal_rate
+                per_strategy_theoretical[name] = amt * mrate
+            elif typ == "income_increase":
+                # negative savings; we show as zero for theoretical display (you can flip if you prefer)
+                mrate = marginal_rate_for_bucket("K1S") if auto_marginal else manual_marginal_rate
+                per_strategy_theoretical[name] = -amt * mrate
+            else:
+                per_strategy_theoretical[name] = 0.0
+
+total_theoretical = sum(v for v in per_strategy_theoretical.values() if v > 0)
+
+# -------------------- PER-STRATEGY ACTUAL (as before) --------------------
 def combined_tax_with_only(key: str) -> float:
     cfg = strategy_configs[key]
     amt = float(cfg.get("amount") or 0)
@@ -301,11 +338,9 @@ def combined_tax_with_only(key: str) -> float:
         elif ent.startswith("Schedule C"):
             sc = schc_1099 - amt
         else:
-            # C-Corp: no pass-through change to individual; skip effect
-            pass
+            pass  # C-Corp doesn't change personal
     elif typ == "deduction_sc":
-        tgt = cfg.get("target", "")
-        if tgt.startswith("Schedule"):
+        if cfg.get("target","").startswith("Schedule"):
             sc = schc_1099 - amt
         else:
             it = itemized + amt
@@ -316,25 +351,19 @@ def combined_tax_with_only(key: str) -> float:
 
     i = Inputs(status=status, wages=wages, sch_c=sc, other_income=oi + k1s + k1p, itemized=max(0.0, it),
                s_corp=s_elect, reasonable_comp=rc)
-    s = compute_scenario(i)
-    fed = max(0.0, s["total_tax"])
-    state = max(0.0, s["taxable_income"] * state_rate)
-    return fed + state
+    return combined_tax(i)
 
 combined_before = base_total_tax
 combined_after = scen_total_tax
 
-per_strategy_savings = {}
+per_strategy_actual = {}
 for k, v in strategy_configs.items():
     amt = float(v.get("amount") or 0)
-    if v["type"] == "income_increase" and amt <= 0:
-        per_strategy_savings[k] = 0.0
-        continue
-    if v["type"] != "income_increase" and amt <= 0:
-        per_strategy_savings[k] = 0.0
+    if amt <= 0:
+        per_strategy_actual[k] = 0.0
         continue
     tax_with_only = combined_tax_with_only(k)
-    per_strategy_savings[k] = max(0.0, combined_before - tax_with_only)
+    per_strategy_actual[k] = max(0.0, combined_before - tax_with_only)
 
 # -------------------- DISPLAY --------------------
 summary_df = pd.DataFrame([
@@ -348,20 +377,22 @@ summary_df = pd.DataFrame([
 ], columns=["Metric","Baseline","Scenario","Net Tax Savings"]).set_index("Metric")
 
 st.subheader("📊 Before vs After")
-st.dataframe(
-    summary_df.style.format({"Baseline":"${:,.0f}","Scenario":"${:,.0f}","Net Tax Savings":"${:,.0f}"}),
-    use_container_width=True
-)
+st.dataframe(summary_df.style.format({"Baseline":"${:,.0f}","Scenario":"${:,.0f}","Net Tax Savings":"${:,.0f}"}), use_container_width=True)
 
 owed_or_refund = "Estimated Refund" if scen_net_due < 0 else "Estimated Amount Due"
 owed_amt = abs(scen_net_due)
 
 st.write("---")
 st.markdown(
-    f"<div style='font-size:20px;'>Projected Federal + State Net Tax Savings: "
-    f"<b><span style='color:#1a7f37;'>${net_savings:,.0f}</span></b></div>",
-    unsafe_allow_html=True
+    f"<div style='font-size:20px;'>Projected Federal + State Net Tax Savings (Actual): "
+    f"<b><span style='color:#1a7f37;'>${net_savings_actual:,.0f}</span></b></div>", unsafe_allow_html=True
 )
+if show_theoretical:
+    st.markdown(
+        f"<div style='font-size:16px;'>Theoretical savings at effective marginal rate(s): "
+        f"<b>${total_theoretical:,.0f}</b> (informational)</div>", unsafe_allow_html=True
+    )
+
 colA, colB = st.columns(2)
 with colA:
     st.metric("Before (Fed + State)", f"${combined_before:,.0f}")
@@ -370,24 +401,23 @@ with colB:
 
 st.markdown(
     f"<div style='margin-top:8px;font-size:18px;'><b>{owed_or_refund} (after ALL payments):</b> "
-    f"${owed_amt:,.0f}</div>",
-    unsafe_allow_html=True
+    f"${owed_amt:,.0f}</div>", unsafe_allow_html=True
 )
-
 if augusta_entity_note:
     st.caption(f"Augusta modeling note: {augusta_entity_note}")
 
 st.write("---")
 
-# -------------------- PDF (2 pages; centered chart; Augusta C-Corp note) --------------------
-def generate_summary_pdf(client_name, combined_before, combined_after, per_strategy_savings,
-                         scen_net_due, state, state_rate, strategy_configs, augusta_entity_note, c_corp_aug_tax_savings):
+# -------------------- PDF --------------------
+def generate_summary_pdf(client_name, combined_before, combined_after, per_strategy_actual,
+                         scen_net_due, state, state_rate, strategy_configs, augusta_entity_note,
+                         c_corp_aug_tax_savings, show_theoretical, per_strategy_theoretical, total_theoretical):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
     story = []
 
-    # ---------- PAGE 1 ----------
+    # Page 1
     if LOGO_PATH.exists():
         story.append(Image(str(LOGO_PATH), width=6.5*72, height=1.5*72, hAlign='CENTER'))
         story.append(Spacer(1, 12))
@@ -397,7 +427,6 @@ def generate_summary_pdf(client_name, combined_before, combined_after, per_strat
     story.append(Paragraph(datetime.now().strftime("%B %d, %Y"), styles["Normal"]))
     story.append(Spacer(1, 10))
 
-    # Summary table
     data = [
         ["", "Before Strategies", "After Strategies", "Net Tax Savings"],
         ["Combined Tax (Federal + State)",
@@ -414,21 +443,19 @@ def generate_summary_pdf(client_name, combined_before, combined_after, per_strat
     story.append(table)
     story.append(Spacer(1, 10))
 
-    # Centered bar chart
-    labels = ["Before Total", "After Total"] + [k for k, v in per_strategy_savings.items() if v > 0]
-    values = [combined_before, combined_after] + [per_strategy_savings[k] for k in labels[2:]]
+    labels = ["Before Total", "After Total"] + [k for k, v in per_strategy_actual.items() if v > 0]
+    values = [combined_before, combined_after] + [per_strategy_actual[k] for k in labels[2:]]
 
     plt.figure(figsize=(6.6, 3.0))
     colors_list = ["#0A2647", "#1a7f37"] + ["#F4B400"] * (len(labels) - 2)
     plt.bar(range(len(labels)), values, color=colors_list)
     plt.xticks(range(len(labels)), labels, rotation=20, ha="right")
     plt.ylabel("Dollars ($)")
-    plt.title("Before vs After • Savings by Strategy")
+    plt.title("Before vs After • Savings by Strategy (Actual)")
     plt.tight_layout()
 
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        plt.savefig(tmp.name, format="png")
-        plt.close()
+        plt.savefig(tmp.name, format="png"); plt.close()
         story.append(Image(tmp.name, width=460, height=230, hAlign='CENTER'))
     story.append(Spacer(1, 8))
 
@@ -441,35 +468,39 @@ def generate_summary_pdf(client_name, combined_before, combined_after, per_strat
     if c_corp_aug_tax_savings > 0:
         story.append(Paragraph(
             f"Augusta applied to C-Corp: estimated entity-level corporate tax savings ~ "
-            f"${c_corp_aug_tax_savings:,.0f} (@21%), not reflected in personal tax.",
+            f"${c_corp_aug_tax_savings:,.0f} (not reflected in personal tax).",
             styles["Italic"]
+        ))
+
+    if show_theoretical and total_theoretical > 0:
+        story.append(Spacer(1, 6))
+        story.append(Paragraph(
+            f"<b>Theoretical (marginal-rate) savings (informational):</b> ${total_theoretical:,.0f}",
+            styles["Normal"]
         ))
 
     story.append(PageBreak())
 
-    # ---------- PAGE 2 ----------
+    # Page 2 — Strategy details
     story.append(Paragraph("<b>Strategies Used — Details & References</b>", styles["Heading1"]))
     story.append(Spacer(1, 6))
 
     for name, cfg in strategy_configs.items():
         amt = float(cfg.get("amount") or 0)
-        typ = cfg["type"]
-        if typ == "income_increase" and amt <= 0:
-            continue
-        if typ != "income_increase" and amt <= 0:
+        if amt <= 0:
             continue
 
         meta = strategy_catalog.get(name, {"desc":"", "irs":[], "actions":[]})
         story.append(Paragraph(f"<b>{name}</b>", styles["Heading3"]))
 
-        if name == "Augusta Rule" and "fmv_day" in cfg:
+        if name == "Augusta Rule":
             story.append(Paragraph(
                 f"FMV/day ${cfg['fmv_day']:,.0f} × {cfg['days']} day(s) (≤14). Modeled deduction: ${amt:,.0f}.",
                 styles["Normal"]
             ))
-            ent = cfg.get("entity","")
-            if ent:
-                story.append(Paragraph(f"Applied to: {ent}", styles["Normal"]))
+            ent = cfg.get("entity",""); 
+            if ent: story.append(Paragraph(f"Applied to: {ent}", styles["Normal"]))
+
         story.append(Paragraph(meta["desc"], styles["Normal"]))
 
         if meta.get("irs"):
@@ -482,25 +513,21 @@ def generate_summary_pdf(client_name, combined_before, combined_after, per_strat
             for step in meta["actions"]:
                 story.append(Paragraph(f"• {step}", styles["Normal"]))
 
-        if meta.get("investment"):
-            proj_return = (cfg.get("investment", 0) or 0) * (cfg.get("roi", 0) or 0)
+        act = per_strategy_actual.get(name, 0.0)
+        if act > 0:
             story.append(Paragraph(
-                f"Investment modeled: ${cfg.get('investment', 0):,.0f} • Expected ROI: {(cfg.get('roi', 0)*100):.1f}% "
-                f"(Projected return: ${proj_return:,.0f})",
+                f"<b>Estimated ACTUAL tax savings (vs. before):</b> <font color='#1a7f37'><b>${act:,.0f}</b></font>",
                 styles["Normal"]
             ))
-
-        # Per-strategy savings line (if computed)
-        est = per_strategy_savings.get(name, 0.0)
-        if est > 0:
-            story.append(Paragraph(
-                f"<b>Estimated tax savings from this strategy (vs. before):</b> "
-                f"<font color='#1a7f37'><b>${est:,.0f}</b></font>",
-                styles["Normal"]
-            ))
+        if show_theoretical:
+            theo = per_strategy_theoretical.get(name, 0.0)
+            if abs(theo) > 0:
+                story.append(Paragraph(
+                    f"<b>Theoretical marginal-rate savings:</b> ${theo:,.0f} (informational)",
+                    styles["Normal"]
+                ))
         story.append(Spacer(1, 10))
 
-    # Disclosure
     story.append(Paragraph(
         "These figures are <b>estimates</b> and may not reflect 100% accuracy if projections are changed or inputs are inaccurate.",
         styles["Italic"]
@@ -512,11 +539,11 @@ def generate_summary_pdf(client_name, combined_before, combined_after, per_strat
     buffer.seek(0)
     return buffer
 
-# -------------------- PDF BUTTON --------------------
 if st.button("📄 Generate Client PDF Summary"):
     pdf_data = generate_summary_pdf(
-        client_name, combined_before, combined_after, per_strategy_savings,
-        scen_net_due, state, state_rate, strategy_configs, augusta_entity_note, c_corp_aug_tax_savings
+        client_name, combined_before, combined_after, per_strategy_actual,
+        scen_net_due, state, state_rate, strategy_configs, augusta_entity_note,
+        c_corp_aug_tax_savings, show_theoretical, per_strategy_theoretical, total_theoretical
     )
     st.download_button(
         label="Download Tax Strategy Summary PDF",
@@ -525,4 +552,4 @@ if st.button("📄 Generate Client PDF Summary"):
         mime="application/pdf"
     )
 
-st.caption("Amatore & Co © 2025 • Federal + State planner v6.4. Planning tool only; confirm positions before filing.")
+st.caption("Amatore & Co © 2025 • Federal + State planner v6.5. Planning tool only; confirm positions before filing.")
