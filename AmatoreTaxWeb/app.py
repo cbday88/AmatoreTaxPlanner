@@ -21,7 +21,7 @@ LOGO_PATH = Path("amatore_collc_cover.jpg")
 if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), use_container_width=True)
 st.caption("4010 Boardman-Canfield Rd Unit 1A • Canfield, OH 44406 • (330) 533-0884")
-st.title("Amatore & Co — Tax Planning Calculator v7.0")
+st.title("Amatore & Co — Tax Planning Calculator v7.1")
 st.caption("Way More Money, Way Less Taxes")
 
 # -------------------- STRATEGIES CATALOG --------------------
@@ -65,51 +65,61 @@ strategy_catalog = {
                             "actions":["Model bracket fill.","Watch IRMAA/phaseouts."]}
 }
 
-# -------------------- SIDEBAR --------------------
+# -------------------- SIDEBAR (EMPTY DEFAULTS) --------------------
 with st.sidebar:
     st.header("Client")
-    client_name = st.text_input("Client Name (shown on PDF)", value="Amatore Client")
+    client_name = st.text_input("Client Name (shown on PDF)", value="")
 
     st.header("Filing Status")
+    # Status must have a value; keep MFJ as default
     status = st.selectbox("Status", ["MFJ", "S", "HOH"], index=0)
 
     st.subheader("Income Details")
-    wages = st.number_input("W-2 Wages", 0, 5_000_000, 120_000, 1_000)
-    schc_1099 = st.number_input("1099 / Schedule C Profit (Self-Employment)", 0, 5_000_000, 60_000, 1_000)
-    scorp_k1   = st.number_input("S-Corp K-1 Income (1120S)", 0, 5_000_000, 0, 1_000)
-    partner_k1 = st.number_input("Partnership/Other K-1 (1065)", 0, 5_000_000, 0, 1_000)
+    # All dollars default to 0
+    wages       = st.number_input("W-2 Wages", 0, 5_000_000, 0, 1_000)
+    schc_1099   = st.number_input("1099 / Schedule C Profit (Self-Employment)", 0, 5_000_000, 0, 1_000)
+    scorp_k1    = st.number_input("S-Corp K-1 Income (1120S)", 0, 5_000_000, 0, 1_000)
+    partner_k1  = st.number_input("Partnership/Other K-1 (1065)", 0, 5_000_000, 0, 1_000)
     qdiv_income = st.number_input("Qualified Dividends", 0, 5_000_000, 0, 500)
     odiv_income = st.number_input("Ordinary Dividends",  0, 5_000_000, 0, 500)
     int_income  = st.number_input("Interest Income",     0, 5_000_000, 0, 500)
     cap_gains   = st.number_input("Capital Gains (net)", 0, 5_000_000, 0, 1_000)
-    itemized = st.number_input("Itemized Deductions (baseline)", 0, 5_000_000, 12_000, 500)
+    itemized    = st.number_input("Itemized Deductions (baseline)", 0, 5_000_000, 0, 500)
 
     st.header("State Tax")
-    states = {
-        "Ohio": 0.035, "Pennsylvania": 0.0307, "Florida": 0.0,
-        "New York": 0.064, "California": 0.070, "Texas": 0.0,
-        "Illinois": 0.0495, "Other (custom)": 0.050
-    }
-    state = st.selectbox("Select State", list(states.keys()), index=0)
-    state_rate = (st.number_input("Custom State Tax Rate (%)", 0.0, 15.0, 5.0, 0.1)/100
-                  if state == "Other (custom)" else states[state])
+    state_options = ["— Select —","Ohio","Pennsylvania","Florida","New York","California","Texas","Illinois","Other (custom)"]
+    state = st.selectbox("Select State", state_options, index=0)
+    if state == "Other (custom)":
+        state_rate = st.number_input("Custom State Tax Rate (%)", 0.0, 15.0, 0.0, 0.1)/100
+    elif state == "Ohio":
+        state_rate = 0.035
+    elif state == "Pennsylvania":
+        state_rate = 0.0307
+    elif state == "Florida":
+        state_rate = 0.0
+    elif state == "New York":
+        state_rate = 0.064
+    elif state == "California":
+        state_rate = 0.070
+    elif state == "Texas":
+        state_rate = 0.0
+    elif state == "Illinois":
+        state_rate = 0.0495
+    else:
+        state_rate = 0.0  # when "— Select —"
 
     st.header("Payments & Withholdings")
-    fed_withhold = st.number_input("Federal Withholding Paid ($)", 0, 5_000_000, 15_000, 500)
-    fed_estimates = st.number_input("Federal Estimated Payments ($)", 0, 5_000_000, 5_000, 500)
+    fed_withhold = st.number_input("Federal Withholding Paid ($)", 0, 5_000_000, 0, 500)
+    fed_estimates = st.number_input("Federal Estimated Payments ($)", 0, 5_000_000, 0, 500)
     st_withhold = st.number_input("State Withholding Paid ($)", 0, 5_000_000, 0, 500)
     st_estimates = st.number_input("State Estimated Payments ($)", 0, 5_000_000, 0, 500)
 
     st.header("Scenario Setup")
     s_elect = st.radio("S-Corp Election? (for the Schedule C activity)", ["No", "Yes"], horizontal=True) == "Yes"
-    rc = st.number_input("Reasonable Compensation if S-Corp (W-2 from S-Corp)", 0, 5_000_000, 72_000, 1_000)
+    rc = st.number_input("Reasonable Compensation if S-Corp (W-2 from S-Corp)", 0, 5_000_000, 0, 1_000)
 
     st.header("Strategies (Select & Configure)")
-    chosen = st.multiselect(
-        "Select strategies to model",
-        list(strategy_catalog.keys()),
-        default=["Augusta Rule","Accountable Plan"]
-    )
+    chosen = st.multiselect("Select strategies to model", list(strategy_catalog.keys()), default=[])
 
     strategy_configs = {}
     for s in chosen:
@@ -118,10 +128,10 @@ with st.sidebar:
         if meta["type"] == "custom_augusta":
             c1, c2, c3 = st.columns([1.2, 1.2, 1.6])
             with c1:
-                fmv_day = st.number_input("FMV / day ($)", 0, 1_000_000_000, 600, 50, key=f"fmv_{s}")
+                fmv_day = st.number_input("FMV / day ($)", 0, 1_000_000_000, 0, 50, key=f"fmv_{s}")
             with c2:
-                days = st.number_input("Days (max 14)", 0, 14, 10, 1, key=f"days_{s}")
-            amount = min(14, days) * fmv_day  # no FMV cap requested
+                days = st.number_input("Days (max 14)", 0, 14, 0, 1, key=f"days_{s}")
+            amount = min(14, days) * fmv_day  # no FMV cap (per your request)
             with c3:
                 entity = st.selectbox(
                     "Entity receiving the Augusta deduction",
@@ -156,7 +166,7 @@ with st.sidebar:
                 with c3:
                     invest_amt = st.number_input(f"{s} investment ($)", 0, 5_000_000, 0, 500, key=f"inv_{s}")
                 with c4:
-                    invest_roi = st.number_input(f"{s} expected ROI (%)", 0.0, 100.0, 8.0, 0.5, key=f"roi_{s}") / 100
+                    invest_roi = st.number_input(f"{s} expected ROI (%)", 0.0, 100.0, 0.0, 0.5, key=f"roi_{s}") / 100
             strategy_configs[s] = {
                 "type": meta["type"],
                 "amount": float(amount or 0),
@@ -167,10 +177,19 @@ with st.sidebar:
         st.divider()
 
     st.header("Marginal Rate Modeling")
-    show_theoretical = st.checkbox("Show theoretical (marginal-rate) savings", value=True)
+    show_theoretical = st.checkbox("Show theoretical (marginal-rate) savings", value=False)
     auto_marginal = st.checkbox("Use automatic marginal rate (recommended)", value=True)
-    manual_marginal_rate = st.number_input("Manual marginal rate (%)", 0.0, 100.0, 35.0, 0.1, disabled=auto_marginal)/100
+    manual_marginal_rate = st.number_input("Manual marginal rate (%)", 0.0, 100.0, 0.0, 0.1, disabled=auto_marginal)/100
     corp_rate = st.number_input("Corporate rate for C-Corp Augusta (%)", 0.0, 100.0, 21.0, 0.1)/100
+
+# -------------------- GUARD: ONLY CALCULATE WHEN THERE'S INPUT --------------------
+income_sum = wages + schc_1099 + scorp_k1 + partner_k1 + qdiv_income + odiv_income + int_income + cap_gains
+strategy_sum = sum(float(cfg.get("amount") or 0) for cfg in strategy_configs.values()) if strategy_configs else 0.0
+has_data = (income_sum > 0) or (itemized > 0) or (strategy_sum > 0)
+
+if not has_data:
+    st.info("👋 Enter income, deductions, or strategy amounts in the sidebar to begin. Nothing is calculated until you add numbers.")
+    st.stop()
 
 # -------------------- APPLY STRATEGIES TO BUCKETS --------------------
 sched_c = schc_1099
@@ -244,7 +263,7 @@ total_paid = (fed_withhold + fed_estimates + st_withhold + st_estimates)
 base_net_due = base_total_tax - total_paid
 scen_net_due = scen_total_tax - total_paid
 
-# Projected Savings (the number we present)
+# Projected Savings (headline)
 projected_savings = max(0.0, base_total_tax - scen_total_tax)
 
 # -------------------- MARGINAL-RATE ENGINE --------------------
@@ -474,13 +493,17 @@ for k, v in per_strategy_actual.items():
     if float(strategy_configs.get(k, {}).get("amount") or 0) > 0:
         actual_rows.append([k, strategy_configs[k]["amount"], v])
 actual_df = pd.DataFrame(actual_rows, columns=["Strategy","Amount","Actual Savings vs Baseline"])
-actual_df.sort_values("Actual Savings vs Baseline", ascending=False, inplace=True)
+if not actual_df.empty:
+    actual_df.sort_values("Actual Savings vs Baseline", ascending=False, inplace=True)
 
 # Shapley (fair)
-shap_rows = [[k, strategy_configs[k]["amount"], shap_contrib.get(k,0.0)] for k in shap_contrib.keys()]
-shap_df = pd.DataFrame(shap_rows, columns=["Strategy","Amount","Fair Share of Savings (Shapley)"])
-if not shap_df.empty:
+if shap_contrib:
+    shap_rows = [[k, strategy_configs[k]["amount"], shap_contrib.get(k,0.0)] for k in shap_contrib.keys()]
+    shap_df = pd.DataFrame(shap_rows, columns=["Strategy","Amount","Fair Share of Savings (Shapley)"])
     shap_df.sort_values("Fair Share of Savings (Shapley)", ascending=False, inplace=True)
+else:
+    shap_df = pd.DataFrame(columns=["Strategy","Amount","Fair Share of Savings (Shapley)"])
+    shap_total = 0.0
 
 tab1, tab2 = st.tabs(["By Strategy (Actual, one-by-one)", "Fair Attribution (Shapley)"])
 with tab1:
@@ -521,7 +544,8 @@ def generate_summary_pdf(
         story.append(Image(str(LOGO_PATH), width=6.5*72, height=1.5*72, hAlign='CENTER'))
         story.append(Spacer(1, 12))
     story.append(Paragraph("<b>Amatore & Co • Tax Planning Summary</b>", styles["Title"]))
-    story.append(Paragraph(f"<b>Client:</b> {client_name}", styles["Normal"]))
+    if client_name.strip():
+        story.append(Paragraph(f"<b>Client:</b> {client_name}", styles["Normal"]))
     story.append(Paragraph("4010 Boardman-Canfield Rd Unit 1A • Canfield, OH 44406 • (330) 533-0884", styles["Normal"]))
     story.append(Paragraph(datetime.now().strftime("%B %d, %Y"), styles["Normal"]))
     story.append(Spacer(1, 8))
@@ -562,7 +586,8 @@ def generate_summary_pdf(
     owed_or_refund_pdf = "Estimated Refund" if scen_net_due < 0 else "Estimated Amount Due"
     owed_amt_pdf = abs(scen_net_due)
     story.append(Paragraph(f"<b>{owed_or_refund_pdf} (after all payments):</b> ${owed_amt_pdf:,.0f}", styles["Normal"]))
-    story.append(Paragraph(f"<b>State selected:</b> {state} ({state_rate*100:.2f}%)", styles["Normal"]))
+    if state != "— Select —":
+        story.append(Paragraph(f"<b>State selected:</b> {state} ({state_rate*100:.2f}%)", styles["Normal"]))
     if augusta_entity_note:
         story.append(Paragraph(f"<b>Augusta note:</b> {augusta_entity_note}", styles["Normal"]))
     if c_corp_aug_tax_savings > 0:
@@ -581,10 +606,12 @@ def generate_summary_pdf(
     story.append(Paragraph("<b>Strategies Used — Details & References</b>", styles["Heading1"]))
     story.append(Spacer(1, 6))
 
+    any_strategy = False
     for name, cfg in strategy_configs.items():
         amt = float(cfg.get("amount") or 0)
         if amt <= 0:
             continue
+        any_strategy = True
         meta = strategy_catalog.get(name, {"desc":"", "irs":[], "actions":[]})
         story.append(Paragraph(f"<b>{name}</b>", styles["Heading3"]))
         if name == "Augusta Rule":
@@ -609,6 +636,10 @@ def generate_summary_pdf(
                 f"<b>Estimated ACTUAL tax savings (vs. before):</b> <font color='#1a7f37'><b>${act:,.0f}</b></font>",
                 styles["Normal"]
             ))
+        story.append(Spacer(1, 8))
+
+    if not any_strategy:
+        story.append(Paragraph("No strategies entered.", styles["Italic"]))
         story.append(Spacer(1, 8))
 
     # Shapley (fair) table
@@ -637,17 +668,9 @@ def generate_summary_pdf(
     buffer.seek(0)
     return buffer
 
-# Save charts we already produced so the PDF can embed them
+# Save charts (if created) so the PDF can embed them
 income_chart_path = tmp_img1.name if 'tmp_img1' in locals() else None
 savings_chart_path = tmp_img2.name if 'tmp_img2' in locals() else None
-
-# Build Shapley DataFrame for PDF
-if shap_contrib:
-    shap_rows = [[k, strategy_configs[k]["amount"], shap_contrib.get(k,0.0)] for k in shap_contrib.keys()]
-    shap_df = pd.DataFrame(shap_rows, columns=["Strategy","Amount","Fair Share of Savings (Shapley)"])
-    shap_df.sort_values("Fair Share of Savings (Shapley)", ascending=False, inplace=True)
-else:
-    shap_df = pd.DataFrame(columns=["Strategy","Amount","Fair Share of Savings (Shapley)"])
 
 # -------------------- PDF BUTTON --------------------
 if st.button("📄 Generate Client PDF Summary"):
@@ -665,9 +688,8 @@ if st.button("📄 Generate Client PDF Summary"):
     st.download_button(
         label="Download Tax Strategy Summary PDF",
         data=pdf_data,
-        file_name=f"{client_name.replace(' ', '_')}_Tax_Summary_{datetime.now().strftime('%Y%m%d')}.pdf",
+        file_name=f"{(client_name or 'Client').replace(' ', '_')}_Tax_Summary_{datetime.now().strftime('%Y%m%d')}.pdf",
         mime="application/pdf"
     )
 
-st.caption("Amatore & Co © 2025 • Federal + State planner v7.0. Planning tool only; confirm positions before filing.")
-
+st.caption("Amatore & Co © 2025 • Federal + State planner v7.1. Planning tool only; confirm positions before filing.")
