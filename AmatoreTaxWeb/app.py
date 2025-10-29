@@ -21,7 +21,7 @@ LOGO_PATH = Path("amatore_collc_cover.jpg")
 if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), use_container_width=True)
 st.caption("4010 Boardman-Canfield Rd Unit 1A • Canfield, OH 44406 • (330) 533-0884")
-st.title("Amatore & Co — Tax Planning Calculator v7.1")
+st.title("Amatore & Co — Tax Planning Calculator v7.2")
 st.caption("Way More Money, Way Less Taxes")
 
 # -------------------- STRATEGIES CATALOG --------------------
@@ -71,11 +71,9 @@ with st.sidebar:
     client_name = st.text_input("Client Name (shown on PDF)", value="")
 
     st.header("Filing Status")
-    # Status must have a value; keep MFJ as default
     status = st.selectbox("Status", ["MFJ", "S", "HOH"], index=0)
 
     st.subheader("Income Details")
-    # All dollars default to 0
     wages       = st.number_input("W-2 Wages", 0, 5_000_000, 0, 1_000)
     schc_1099   = st.number_input("1099 / Schedule C Profit (Self-Employment)", 0, 5_000_000, 0, 1_000)
     scorp_k1    = st.number_input("S-Corp K-1 Income (1120S)", 0, 5_000_000, 0, 1_000)
@@ -191,12 +189,29 @@ if not has_data:
     st.info("👋 Enter income, deductions, or strategy amounts in the sidebar to begin. Nothing is calculated until you add numbers.")
     st.stop()
 
-# -------------------- APPLY STRATEGIES TO BUCKETS --------------------
+# ------------------------------------------------------------------
+# 1) BASELINE (***NO STRATEGIES APPLIED***)
+# ------------------------------------------------------------------
+other_income_base = qdiv_income + odiv_income + int_income + cap_gains
+
+inp_base = Inputs(
+    status=status,
+    wages=wages,
+    sch_c=schc_1099,
+    other_income=other_income_base + scorp_k1 + partner_k1,  # include K-1s in 'other' for the engine
+    itemized=itemized,
+    s_corp=False  # baseline = no S-corp treatment toggle for the Sch C activity
+)
+base = compute_baseline(inp_base)
+
+# ------------------------------------------------------------------
+# 2) APPLY STRATEGIES to build the SCENARIO INPUTS
+# ------------------------------------------------------------------
+# start from the same baseline buckets
 sched_c = schc_1099
 k1_s = scorp_k1
 k1_p = partner_k1
-other_income_base = qdiv_income + odiv_income + int_income + cap_gains
-
+other_income_baseline = other_income_base
 deduct_itemized_total = 0.0
 add_other_income = 0.0
 augusta_entity_note = None
@@ -233,15 +248,20 @@ for name, cfg in strategy_configs.items():
 
 itemized_base = itemized
 itemized_scen = max(0.0, itemized + deduct_itemized_total)
-other_income_baseline = other_income_base
-other_income_scen = other_income_base + add_other_income
+other_income_scen_only = other_income_baseline + add_other_income  # does NOT include K-1 adjustments yet
 
-# -------------------- BASELINE & SCENARIO RUNS --------------------
-inp_base = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_baseline, itemized=itemized_base, s_corp=False)
-base = compute_baseline(inp_base)
-
-inp_scen = Inputs(status=status, wages=wages, sch_c=sched_c, other_income=other_income_scen + k1_s + k1_p,
-                  itemized=itemized_scen, s_corp=s_elect, reasonable_comp=rc)
+# ------------------------------------------------------------------
+# 3) SCENARIO (AFTER STRATEGIES)
+# ------------------------------------------------------------------
+inp_scen = Inputs(
+    status=status,
+    wages=wages,
+    sch_c=sched_c,
+    other_income=other_income_scen_only + k1_s + k1_p,
+    itemized=itemized_scen,
+    s_corp=s_elect,
+    reasonable_comp=rc
+)
 scen = compute_scenario(inp_scen)
 
 # -------------------- STATE TAX + TOTALS --------------------
@@ -255,18 +275,18 @@ base_total_tax = base_fed_tax + base_state_tax
 scen_total_tax = scen_fed_tax + scen_state_tax
 
 # Total income (modeled) for charts
-base_total_income = wages + schc_1099 + other_income_baseline + scorp_k1 + partner_k1
-scen_total_income = wages + sched_c + other_income_scen + k1_s + k1_p
+base_total_income = wages + schc_1099 + other_income_base + scorp_k1 + partner_k1
+scen_total_income = wages + sched_c + (other_income_scen_only) + k1_s + k1_p
 
 # Payments → refund/due (shown separately)
 total_paid = (fed_withhold + fed_estimates + st_withhold + st_estimates)
 base_net_due = base_total_tax - total_paid
 scen_net_due = scen_total_tax - total_paid
 
-# Projected Savings (headline)
+# Projected Savings (headline) = pure liability reduction
 projected_savings = max(0.0, base_total_tax - scen_total_tax)
 
-# -------------------- MARGINAL-RATE ENGINE --------------------
+# -------------------- MARGINAL-RATE ENGINE (uses BASELINE buckets) --------------------
 def combined_tax(i: Inputs) -> float:
     s = compute_scenario(i)
     return max(0.0, s["total_tax"]) + max(0.0, s["taxable_income"] * state_rate)
@@ -274,23 +294,26 @@ def combined_tax(i: Inputs) -> float:
 def marginal_rate_for_bucket(bucket: str, bump: float = 1000.0) -> float:
     """Buckets: 'SC','K1S','K1P','ITEMIZED'."""
     if bucket == "ITEMIZED":
-        i0 = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_baseline,
+        i0 = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_base + scorp_k1 + partner_k1,
                     itemized=itemized_base, s_corp=s_elect, reasonable_comp=rc)
         t0 = combined_tax(i0)
-        i1 = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_baseline,
+        i1 = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_base + scorp_k1 + partner_k1,
                     itemized=itemized_base + bump, s_corp=s_elect, reasonable_comp=rc)
         t1 = combined_tax(i1)
         return max(0.0, (t0 - t1) / bump)
 
-    i0 = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_baseline + scorp_k1 + partner_k1,
+    i0 = Inputs(status=status, wages=wages, sch_c=schc_1099,
+                other_income=other_income_base + scorp_k1 + partner_k1,
                 itemized=itemized_base, s_corp=s_elect, reasonable_comp=rc)
     t0 = combined_tax(i0)
 
     if bucket == "SC":
-        i1 = Inputs(status=status, wages=wages, sch_c=schc_1099 + bump, other_income=other_income_baseline + scorp_k1 + partner_k1,
+        i1 = Inputs(status=status, wages=wages, sch_c=schc_1099 + bump,
+                    other_income=other_income_base + scorp_k1 + partner_k1,
                     itemized=itemized_base, s_corp=s_elect, reasonable_comp=rc)
     elif bucket in ("K1S","K1P"):
-        i1 = Inputs(status=status, wages=wages, sch_c=schc_1099, other_income=other_income_baseline + scorp_k1 + partner_k1 + bump,
+        i1 = Inputs(status=status, wages=wages, sch_c=schc_1099,
+                    other_income=other_income_base + scorp_k1 + partner_k1 + bump,
                     itemized=itemized_base, s_corp=s_elect, reasonable_comp=rc)
     else:
         return 0.0
@@ -332,8 +355,9 @@ if show_theoretical:
                 per_strategy_theoretical[name] = 0.0
 total_theoretical = sum(v for v in per_strategy_theoretical.values() if v > 0)
 
-# -------------------- PER-STRATEGY (ACTUAL, one-by-one) --------------------
+# -------------------- PER-STRATEGY (ACTUAL, one-by-one) on BASELINE --------------------
 def tax_with_subset(active_keys):
+    # Start from BASELINE buckets (no strategies), then add only those in 'active_keys'
     sc = schc_1099
     k1s = scorp_k1
     k1p = partner_k1
@@ -343,7 +367,7 @@ def tax_with_subset(active_keys):
     for k in active_keys:
         cfg = strategy_configs[k]
         amt = float(cfg.get("amount") or 0)
-        if amt <= 0: 
+        if amt <= 0:
             continue
         typ = cfg["type"]
         if typ == "custom_augusta":
@@ -672,6 +696,14 @@ def generate_summary_pdf(
 income_chart_path = tmp_img1.name if 'tmp_img1' in locals() else None
 savings_chart_path = tmp_img2.name if 'tmp_img2' in locals() else None
 
+# Build Shapley DataFrame for PDF
+if shap_contrib:
+    shap_rows = [[k, strategy_configs[k]["amount"], shap_contrib.get(k,0.0)] for k in shap_contrib.keys()]
+    shap_df = pd.DataFrame(shap_rows, columns=["Strategy","Amount","Fair Share of Savings (Shapley)"])
+    shap_df.sort_values("Fair Share of Savings (Shapley)", ascending=False, inplace=True)
+else:
+    shap_df = pd.DataFrame(columns=["Strategy","Amount","Fair Share of Savings (Shapley)"])
+
 # -------------------- PDF BUTTON --------------------
 if st.button("📄 Generate Client PDF Summary"):
     pdf_data = generate_summary_pdf(
@@ -692,4 +724,4 @@ if st.button("📄 Generate Client PDF Summary"):
         mime="application/pdf"
     )
 
-st.caption("Amatore & Co © 2025 • Federal + State planner v7.1. Planning tool only; confirm positions before filing.")
+st.caption("Amatore & Co © 2025 • Federal + State planner v7.2. Planning tool only; confirm positions before filing.")
