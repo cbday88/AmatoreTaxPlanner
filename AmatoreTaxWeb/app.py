@@ -21,7 +21,7 @@ LOGO_PATH = Path("amatore_collc_cover.jpg")
 if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), use_container_width=True)
 st.caption("4010 Boardman-Canfield Rd Unit 1A • Canfield, OH 44406 • (330) 533-0884")
-st.title("Amatore & Co — Tax Planning Calculator v7.2")
+st.title("Amatore & Co — Tax Planning Calculator v7.3")
 st.caption("Way More Money, Way Less Taxes")
 
 # -------------------- STRATEGIES CATALOG --------------------
@@ -129,7 +129,7 @@ with st.sidebar:
                 fmv_day = st.number_input("FMV / day ($)", 0, 1_000_000_000, 0, 50, key=f"fmv_{s}")
             with c2:
                 days = st.number_input("Days (max 14)", 0, 14, 0, 1, key=f"days_{s}")
-            amount = min(14, days) * fmv_day  # no FMV cap (per your request)
+            amount = min(14, days) * fmv_day  # uncapped FMV (per your request)
             with c3:
                 entity = st.selectbox(
                     "Entity receiving the Augusta deduction",
@@ -189,6 +189,10 @@ if not has_data:
     st.info("👋 Enter income, deductions, or strategy amounts in the sidebar to begin. Nothing is calculated until you add numbers.")
     st.stop()
 
+# Normalize to avoid negative Schedule C due to large deductions in UI
+def nonneg(x): 
+    return max(0.0, float(x or 0))
+
 # ------------------------------------------------------------------
 # 1) BASELINE (***NO STRATEGIES APPLIED***)
 # ------------------------------------------------------------------
@@ -198,16 +202,15 @@ inp_base = Inputs(
     status=status,
     wages=wages,
     sch_c=schc_1099,
-    other_income=other_income_base + scorp_k1 + partner_k1,  # include K-1s in 'other' for the engine
+    other_income=other_income_base + scorp_k1 + partner_k1,  # pipe K-1s through other_income for engine
     itemized=itemized,
-    s_corp=False  # baseline = no S-corp treatment toggle for the Sch C activity
+    s_corp=False
 )
 base = compute_baseline(inp_base)
 
 # ------------------------------------------------------------------
 # 2) APPLY STRATEGIES to build the SCENARIO INPUTS
 # ------------------------------------------------------------------
-# start from the same baseline buckets
 sched_c = schc_1099
 k1_s = scorp_k1
 k1_p = partner_k1
@@ -225,20 +228,20 @@ for name, cfg in strategy_configs.items():
     if typ == "custom_augusta":
         ent = cfg.get("entity", "S-Corp (1120S)")
         if ent.startswith("S-Corp"):
-            k1_s -= amt
+            k1_s = nonneg(scorp_k1 - amt)
             augusta_entity_note = "Applied to S-Corp (reduces K-1 income)."
         elif ent.startswith("Partnership"):
-            k1_p -= amt
+            k1_p = nonneg(partner_k1 - amt)
             augusta_entity_note = "Applied to Partnership (reduces K-1 income)."
         elif ent.startswith("Schedule C"):
-            sched_c -= amt
+            sched_c = nonneg(schc_1099 - amt)
             augusta_entity_note = "Applied to Schedule C (reduces business profit)."
         else:  # C-Corp
             c_corp_aug_tax_savings = amt * corp_rate
             augusta_entity_note = f"Applied to C-Corp (entity-level deduction; shown @ {corp_rate*100:.1f}%)."
     elif typ == "deduction_sc":
         if cfg.get("target","").startswith("Schedule"):
-            sched_c -= amt
+            sched_c = nonneg(sched_c - amt)
         else:
             deduct_itemized_total += amt
     elif typ == "deduction_itemized":
@@ -248,7 +251,7 @@ for name, cfg in strategy_configs.items():
 
 itemized_base = itemized
 itemized_scen = max(0.0, itemized + deduct_itemized_total)
-other_income_scen_only = other_income_baseline + add_other_income  # does NOT include K-1 adjustments yet
+other_income_scen_only = other_income_baseline + add_other_income  # add K-1s next
 
 # ------------------------------------------------------------------
 # 3) SCENARIO (AFTER STRATEGIES)
@@ -372,13 +375,13 @@ def tax_with_subset(active_keys):
         typ = cfg["type"]
         if typ == "custom_augusta":
             ent = cfg.get("entity","S-Corp (1120S)")
-            if ent.startswith("S-Corp"):        k1s = scorp_k1 - amt
-            elif ent.startswith("Partnership"): k1p = partner_k1 - amt
-            elif ent.startswith("Schedule C"):  sc  = schc_1099 - amt
+            if ent.startswith("S-Corp"):        k1s = nonneg(scorp_k1 - amt)
+            elif ent.startswith("Partnership"): k1p = nonneg(partner_k1 - amt)
+            elif ent.startswith("Schedule C"):  sc  = nonneg(schc_1099 - amt)
             else:                               ...
         elif typ == "deduction_sc":
             tgt = cfg.get("target","")
-            if tgt.startswith("Schedule"):       sc = schc_1099 - amt
+            if tgt.startswith("Schedule"):       sc = nonneg(schc_1099 - amt)
             else:                                it = itemized + amt
         elif typ == "deduction_itemized":
             it = itemized + amt
@@ -458,6 +461,7 @@ st.markdown(
     f"<b><span style='color:#1a7f37;'>${projected_savings:,.0f}</span></b></div>",
     unsafe_allow_html=True
 )
+
 if show_theoretical and total_theoretical > 0:
     st.markdown(
         f"<div style='font-size:14px;opacity:0.85;'>Theoretical (marginal-rate) savings (informational): "
@@ -545,6 +549,63 @@ with tab2:
         st.dataframe(shap_df.style.format({"Amount":"${:,.0f}","Fair Share of Savings (Shapley)":"${:,.0f}"}),
                      use_container_width=True)
         st.metric("Total Savings (adds up exactly)", f"${shap_total:,.0f}")
+
+# -------------------- Diagnostics (internal) --------------------
+with st.expander("🔎 Diagnostics (internal)"):
+    st.write("**Baseline buckets (no strategies):**")
+    st.json({
+        "W-2": wages,
+        "Schedule C (base)": schc_1099,
+        "K-1 S-Corp (base)": scorp_k1,
+        "K-1 Partnership (base)": partner_k1,
+        "Other income components (base)": {
+            "Qualified Dividends": qdiv_income,
+            "Ordinary Dividends": odiv_income,
+            "Interest": int_income,
+            "Capital Gains": cap_gains
+        },
+        "Itemized (base)": itemized,
+        "State rate": state_rate
+    })
+
+    st.write("**Scenario buckets (after strategies):**")
+    st.json({
+        "Schedule C (after)": sched_c,
+        "K-1 S-Corp (after)": k1_s,
+        "K-1 Partnership (after)": k1_p,
+        "Other income (after)": other_income_scen_only,
+        "Itemized (after)": itemized_scen
+    })
+
+    st.write("**Federal & State results:**")
+    st.json({
+        "Baseline": {
+            "Taxable": base["taxable_income"],
+            "Fed tax": base_fed_tax,
+            "State tax": base_state_tax,
+            "Total": base_total_tax
+        },
+        "Scenario": {
+            "Taxable": scen["taxable_income"],
+            "Fed tax": scen_fed_tax,
+            "State tax": scen_state_tax,
+            "Total": scen_total_tax
+        },
+        "Projected Savings": projected_savings
+    })
+
+    def _safe_rate(name, fn):
+        try:
+            return round(100 * fn(), 2)
+        except Exception:
+            return None
+
+    st.write("**Informational local marginal rates (baseline):**")
+    st.json({
+        "Schedule C": _safe_rate("SC", lambda: marginal_rate_for_bucket("SC")),
+        "K-1 (S-Corp/Other)": _safe_rate("K1S", lambda: marginal_rate_for_bucket("K1S")),
+        "Itemized deductions": _safe_rate("ITEMIZED", lambda: marginal_rate_for_bucket("ITEMIZED"))
+    })
 
 # -------------------- PDF --------------------
 def generate_summary_pdf(
@@ -692,7 +753,7 @@ def generate_summary_pdf(
     buffer.seek(0)
     return buffer
 
-# Save charts (if created) so the PDF can embed them
+# Save chart paths for PDF
 income_chart_path = tmp_img1.name if 'tmp_img1' in locals() else None
 savings_chart_path = tmp_img2.name if 'tmp_img2' in locals() else None
 
@@ -724,4 +785,4 @@ if st.button("📄 Generate Client PDF Summary"):
         mime="application/pdf"
     )
 
-st.caption("Amatore & Co © 2025 • Federal + State planner v7.2. Planning tool only; confirm positions before filing.")
+st.caption("Amatore & Co © 2025 • Federal + State planner v7.3. Planning tool only; confirm positions before filing.")
