@@ -22,7 +22,7 @@ LOGO_PATH = Path("amatore_collc_cover.jpg")
 if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), use_container_width=True)
 st.caption("4010 Boardman-Canfield Rd Unit 1A • Canfield, OH 44406 • (330) 533-0884")
-st.title("Amatore & Co — Tax Planning Calculator v7.4")
+st.title("Amatore & Co — Tax Planning Calculator v7.5")
 st.caption("Way More Money, Way Less Taxes")
 
 
@@ -76,6 +76,17 @@ strategy_catalog = {
         "desc": "Convert pre-tax IRA to Roth; adds ordinary income now.",
         "irs": [{"label": "Pub 590-A", "url": "https://www.irs.gov/publications/p590a"}],
         "actions": ["Model bracket fill.", "Watch IRMAA/phaseouts/credits."]
+    },
+    # NEW: Captive Insurance (831(b))
+    "Captive Insurance (IRC §831(b))": {
+        "type": "captive_831b",
+        "desc": "Form a captive to insure business risks; premiums paid may be deductible by the operating business (complex rules).",
+        "irs": [
+            {"label": "IRC §831(b)", "url": "https://www.law.cornell.edu/uscode/text/26/831"},
+            {"label": "Form 8886 / Instructions", "url": "https://www.irs.gov/pub/irs-pdf/i8886.pdf"},
+            {"label": "Notice 2016-66 (micro-captives)", "url": "https://www.irs.gov/pub/irs-drop/n-16-66.pdf"},
+        ],
+        "actions": ["Obtain legal/actuarial advice.", "Select domicile & meet capitalization.", "Document risk pool & policies."]
     },
 }
 
@@ -144,7 +155,7 @@ with st.sidebar:
                 fmv_day = st.number_input("FMV / day ($)", 0, 1_000_000_000, 0, 50, key=f"fmv_{s}")
             with c2:
                 days = st.number_input("Days (max 14)", 0, 14, 0, 1, key=f"days_{s}")
-            amount = min(14, days) * fmv_day  # uncapped FMV per your request; days realistically capped at 14
+            amount = min(14, days) * fmv_day  # FMV uncapped, days realistically capped at 14
             with c3:
                 entity = st.selectbox(
                     "Entity receiving the Augusta deduction",
@@ -160,6 +171,18 @@ with st.sidebar:
                 "investment": 0.0,
                 "roi": 0.0
             }
+        elif meta["type"] == "captive_831b":
+            c1, c2 = st.columns([1.2, 1.8])
+            with c1:
+                amount = st.number_input("Premium amount ($)", 0, 10_000_000, 0, 1000, key=f"cap_amt_{s}")
+            with c2:
+                where = st.selectbox("Apply premium as deduction to",
+                                     ["Schedule C (reduces business profit)",
+                                      "S-Corp K-1 (reduces K-1 income)",
+                                      "Partnership K-1 (reduces K-1 income)",
+                                      "Itemized deductions (below-the-line)"],
+                                     key=f"cap_where_{s}")
+            strategy_configs[s] = {"type": "captive_831b", "amount": float(amount or 0), "target": where}
         else:
             c1, c2 = st.columns([1.3, 1.7])
             with c1:
@@ -177,9 +200,9 @@ with st.sidebar:
             if meta.get("investment"):
                 c3, c4 = st.columns([1.0, 1.0])
                 with c3:
-                    invest_amt = st.number_input(f"{s} investment ($)", 0, 5_000_000, 0, 500, key=f"inv_{s}")
+                    invest_amt = st.number_input(f"{s} investment ($)", 0, 5_000_000, 0, 500, key=f"roi_inv_{s}")
                 with c4:
-                    invest_roi = st.number_input(f"{s} expected ROI (%)", 0.0, 100.0, 0.0, 0.5, key=f"roi_{s}") / 100
+                    invest_roi = st.number_input(f"{s} expected ROI (%)", 0.0, 100.0, 0.0, 0.5, key=f"roi_pct_{s}") / 100
             strategy_configs[s] = {
                 "type": meta["type"],
                 "amount": float(amount or 0),
@@ -211,7 +234,7 @@ if not has_data:
 # ------------------------------------------------------------------
 other_income_base = qdiv_income + odiv_income + int_income + cap_gains
 
-# Baseline = no strategies; S-corp election OFF for the baseline
+# Baseline = no strategies; S-corp election OFF for baseline
 inp_base = Inputs(
     status=status,
     wages=wages,
@@ -234,7 +257,7 @@ other_income_baseline = other_income_base
 deduct_itemized_total = 0.0
 add_other_income      = 0.0
 augusta_entity_note   = None
-c_corp_aug_tax_savings = 0.0  # displayed as note; not counted in personal savings
+c_corp_aug_tax_savings = 0.0  # note only (not in personal savings)
 
 for name, cfg in strategy_configs.items():
     amt = float(cfg.get("amount") or 0)
@@ -244,7 +267,7 @@ for name, cfg in strategy_configs.items():
 
     if typ == "custom_augusta":
         ent = cfg.get("entity", "S-Corp (1120S)")
-        # ALLOW NEGATIVE (no clamping): pass-through losses are real & should flow
+        # Allow negative (losses) to flow through — no clamping
         if ent.startswith("S-Corp"):
             k1_s = scorp_k1 - amt
             augusta_entity_note = "Augusta: Applied to S-Corp (reduces K-1 income)."
@@ -258,10 +281,21 @@ for name, cfg in strategy_configs.items():
             c_corp_aug_tax_savings = amt * corp_rate
             augusta_entity_note = f"Augusta: Applied to C-Corp (entity-level deduction, ~{corp_rate*100:.1f}% savings)."
 
+    elif typ == "captive_831b":
+        # Premium paid by operating business — where does the deduction hit?
+        tgt = cfg.get("target","")
+        if tgt.startswith("Schedule C"):
+            sched_c = sched_c - amt              # allow negative
+        elif tgt.startswith("S-Corp K-1"):
+            k1_s = k1_s - amt                    # allow negative
+        elif tgt.startswith("Partnership K-1"):
+            k1_p = k1_p - amt                    # allow negative
+        else:
+            deduct_itemized_total += amt         # fallback: itemized (rare in practice)
+
     elif typ == "deduction_sc":
-        # Can direct to Schedule C or Itemized (via 'target' control)
         if cfg.get("target","").startswith("Schedule"):
-            sched_c = sched_c - amt   # allow negative; if you want to clamp, do it here
+            sched_c = sched_c - amt              # allow negative
         else:
             deduct_itemized_total += amt
 
@@ -273,7 +307,7 @@ for name, cfg in strategy_configs.items():
 
 itemized_base = itemized
 itemized_scen = max(0.0, itemized + deduct_itemized_total)
-other_income_scen_only = other_income_baseline + add_other_income  # add K-1s later
+other_income_scen_only = other_income_baseline + add_other_income  # add K-1s next
 
 
 # ------------------------------------------------------------------
@@ -368,6 +402,17 @@ if show_theoretical:
             else:
                 mrate = marginal_rate_for_bucket("SC")  if auto_marginal else manual_marginal_rate
             per_strategy_theoretical[name] = amt * mrate
+        elif cfg["type"] == "captive_831b":
+            tgt = cfg.get("target","")
+            if tgt.startswith("Schedule C"):
+                mrate = marginal_rate_for_bucket("SC") if auto_marginal else manual_marginal_rate
+            elif tgt.startswith("S-Corp"):
+                mrate = marginal_rate_for_bucket("K1S") if auto_marginal else manual_marginal_rate
+            elif tgt.startswith("Partnership"):
+                mrate = marginal_rate_for_bucket("K1P") if auto_marginal else manual_marginal_rate
+            else:
+                mrate = marginal_rate_for_bucket("ITEMIZED") if auto_marginal else manual_marginal_rate
+            per_strategy_theoretical[name] = amt * mrate
         else:
             typ = cfg["type"]
             if typ == "deduction_sc":
@@ -404,7 +449,12 @@ def tax_with_subset(active_keys):
             if ent.startswith("S-Corp"):        k1s = scorp_k1 - amt   # allow negative
             elif ent.startswith("Partnership"): k1p = partner_k1 - amt # allow negative
             elif ent.startswith("Schedule C"):  sc  = schc_1099 - amt  # allow negative
-            else:                               ...
+        elif typ == "captive_831b":
+            tgt = cfg.get("target","")
+            if tgt.startswith("Schedule C"):     sc  = schc_1099 - amt
+            elif tgt.startswith("S-Corp"):       k1s = scorp_k1 - amt
+            elif tgt.startswith("Partnership"):  k1p = partner_k1 - amt
+            else:                                it  = itemized + amt
         elif typ == "deduction_sc":
             tgt = cfg.get("target","")
             if tgt.startswith("Schedule"):       sc = schc_1099 - amt  # allow negative
@@ -488,12 +538,6 @@ st.markdown(
     f"<b><span style='color:#1a7f37;'>${projected_savings:,.0f}</span></b></div>",
     unsafe_allow_html=True
 )
-if show_theoretical and total_theoretical > 0:
-    st.markdown(
-        f"<div style='font-size:14px;opacity:0.85;'>Theoretical (marginal-rate) savings (informational): "
-        f"<b>${total_theoretical:,.0f}</b></div>",
-        unsafe_allow_html=True
-    )
 
 # Refund / Due after payments
 owed_or_refund = "Estimated Refund" if scen_net_due < 0 else "Estimated Amount Due"
@@ -584,7 +628,7 @@ with st.expander("🔎 Diagnostics (internal)"):
         "Schedule C (base)": schc_1099,
         "K-1 S-Corp (base)": scorp_k1,
         "K-1 Partnership (base)": partner_k1,
-        "Other income components (base)": {
+        "Other income (base)": {
             "Qualified Dividends": qdiv_income,
             "Ordinary Dividends": odiv_income,
             "Interest": int_income,
@@ -599,7 +643,7 @@ with st.expander("🔎 Diagnostics (internal)"):
         "Schedule C (after)": sched_c,
         "K-1 S-Corp (after)": k1_s,
         "K-1 Partnership (after)": k1_p,
-        "Other income (after)": other_income_scen_only,
+        "Other income adders (after)": other_income_scen_only,
         "Itemized (after)": itemized_scen
     })
 
@@ -809,4 +853,4 @@ if st.button("📄 Generate Client PDF Summary"):
         mime="application/pdf"
     )
 
-st.caption("Amatore & Co © 2025 • Federal + State planner v7.4. Planning tool only; confirm positions before filing.")
+st.caption("Amatore & Co © 2025 • Federal + State planner v7.5. Planning tool only; confirm positions before filing.")
