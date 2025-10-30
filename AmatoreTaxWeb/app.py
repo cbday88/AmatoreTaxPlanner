@@ -22,7 +22,7 @@ LOGO_PATH = Path("amatore_collc_cover.jpg")
 if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), use_container_width=True)
 st.caption("4010 Boardman-Canfield Rd Unit 1A • Canfield, OH 44406 • (330) 533-0884")
-st.title("Amatore & Co — Tax Planning Calculator v7.5")
+st.title("Amatore & Co — Tax Planning Calculator v7.6")
 st.caption("Way More Money, Way Less Taxes")
 
 
@@ -87,6 +87,21 @@ strategy_catalog = {
             {"label": "Notice 2016-66 (micro-captives)", "url": "https://www.irs.gov/pub/irs-drop/n-16-66.pdf"},
         ],
         "actions": ["Obtain legal/actuarial advice.", "Select domicile & meet capitalization.", "Document risk pool & policies."]
+    },
+    # NEW: Accelerated Depreciation §179/Bonus
+    "Accelerated Depreciation (§179/Bonus)": {
+        "type": "deduction_sc",
+        "desc": "Immediate expensing under §179 and/or bonus depreciation; can be driven by cost segregation for real property components.",
+        "irs": [
+            {"label": "IRC §179", "url": "https://www.law.cornell.edu/uscode/text/26/179"},
+            {"label": "Pub 946 – How to Depreciate Property", "url": "https://www.irs.gov/publications/p946"},
+            {"label": "IRC §168(k) (Bonus Depreciation)", "url": "https://www.law.cornell.edu/uscode/text/26/168"},
+        ],
+        "actions": [
+            "Confirm asset eligibility and business-use %.",
+            "Decide §179 vs. bonus sequencing based on income limits and phaseouts.",
+            "If real property: order cost seg; track §481(a)/Form 3115 if needed."
+        ]
     },
 }
 
@@ -171,6 +186,7 @@ with st.sidebar:
                 "investment": 0.0,
                 "roi": 0.0
             }
+
         elif meta["type"] == "captive_831b":
             c1, c2 = st.columns([1.2, 1.8])
             with c1:
@@ -183,7 +199,42 @@ with st.sidebar:
                                       "Itemized deductions (below-the-line)"],
                                      key=f"cap_where_{s}")
             strategy_configs[s] = {"type": "captive_831b", "amount": float(amount or 0), "target": where}
+
+        # Special helper for Accelerated Depreciation (§179/Bonus)
+        elif s == "Accelerated Depreciation (§179/Bonus)":
+            with st.expander("Quick §179/Bonus estimator"):
+                purchase = st.number_input("Purchase price ($)", 0, 50_000_000, 0, 1000, key=f"ad_purch_{s}")
+                land_pct = st.number_input("Land % (typ. 15–20%)", 0.0, 100.0, 15.0, 0.5, key=f"ad_landpct_{s}") / 100.0
+                cs_pct   = st.number_input("Cost seg % (typ. ~25%)", 0.0, 100.0, 25.0, 0.5, key=f"ad_cspct_{s}") / 100.0
+                year = st.selectbox("Bonus year", [2023, 2024, 2025, 2026, 2027], index=1, key=f"ad_year_{s}")
+                bonus_lookup = {2023:0.80, 2024:0.60, 2025:0.40, 2026:0.20, 2027:0.00}
+                bonus_pct = bonus_lookup.get(year, 0.0)
+                est = max(0.0, (purchase * (1 - land_pct)) * cs_pct * bonus_pct)
+                st.caption(f"Estimated accelerated amount = Basis × cost-seg × bonus = ${est:,.0f}")
+                use_est = st.checkbox("Use this estimate as the strategy amount", value=True, key=f"ad_use_{s}")
+
+            c1, c2 = st.columns([1.3, 1.7])
+            with c1:
+                default_amt = int(round(est, 0)) if use_est else 0
+                amount = st.number_input(f"{s} amount ($)", 0, 50_000_000, default_amt, 500, key=f"amt_{s}")
+            with c2:
+                target = st.selectbox(
+                    f"Apply {s}",
+                    ["Schedule C (reduces business profit)", "S-Corp K-1 (reduces K-1 income)",
+                     "Partnership K-1 (reduces K-1 income)", "Itemized deductions (below-the-line)"],
+                    index=0,
+                    key=f"tgt_{s}"
+                )
+            strategy_configs[s] = {
+                "type": meta["type"],
+                "amount": float(amount or 0),
+                "target": target,
+                "investment": 0.0,
+                "roi": 0.0
+            }
+
         else:
+            # Generic handler for other deduction_sc / deduction_itemized / income_increase
             c1, c2 = st.columns([1.3, 1.7])
             with c1:
                 amount = st.number_input(f"{s} amount ($)", 0, 5_000_000, 0, 500, key=f"amt_{s}")
@@ -269,35 +320,31 @@ for name, cfg in strategy_configs.items():
         ent = cfg.get("entity", "S-Corp (1120S)")
         # Allow negative (losses) to flow through — no clamping
         if ent.startswith("S-Corp"):
-            k1_s = scorp_k1 - amt
+            k1_s = k1_s - amt
             augusta_entity_note = "Augusta: Applied to S-Corp (reduces K-1 income)."
         elif ent.startswith("Partnership"):
-            k1_p = partner_k1 - amt
+            k1_p = k1_p - amt
             augusta_entity_note = "Augusta: Applied to Partnership (reduces K-1 income)."
         elif ent.startswith("Schedule C"):
-            sched_c = schc_1099 - amt
+            sched_c = sched_c - amt
             augusta_entity_note = "Augusta: Applied to Schedule C (reduces business profit)."
         else:  # C-Corp (entity level only)
             c_corp_aug_tax_savings = amt * corp_rate
             augusta_entity_note = f"Augusta: Applied to C-Corp (entity-level deduction, ~{corp_rate*100:.1f}% savings)."
 
     elif typ == "captive_831b":
-        # Premium paid by operating business — where does the deduction hit?
         tgt = cfg.get("target","")
-        if tgt.startswith("Schedule C"):
-            sched_c = sched_c - amt              # allow negative
-        elif tgt.startswith("S-Corp K-1"):
-            k1_s = k1_s - amt                    # allow negative
-        elif tgt.startswith("Partnership K-1"):
-            k1_p = k1_p - amt                    # allow negative
-        else:
-            deduct_itemized_total += amt         # fallback: itemized (rare in practice)
+        if tgt.startswith("Schedule C"):     sched_c = sched_c - amt
+        elif tgt.startswith("S-Corp"):       k1_s    = k1_s - amt
+        elif tgt.startswith("Partnership"):  k1_p    = k1_p - amt
+        else:                                deduct_itemized_total += amt
 
     elif typ == "deduction_sc":
-        if cfg.get("target","").startswith("Schedule"):
-            sched_c = sched_c - amt              # allow negative
-        else:
-            deduct_itemized_total += amt
+        tgt = cfg.get("target","")
+        if tgt.startswith("Schedule C"):     sched_c = sched_c - amt
+        elif tgt.startswith("S-Corp"):       k1_s    = k1_s - amt
+        elif tgt.startswith("Partnership"):  k1_p    = k1_p - amt
+        else:                                deduct_itemized_total += amt
 
     elif typ == "deduction_itemized":
         deduct_itemized_total += amt
@@ -402,21 +449,32 @@ if show_theoretical:
             else:
                 mrate = marginal_rate_for_bucket("SC")  if auto_marginal else manual_marginal_rate
             per_strategy_theoretical[name] = amt * mrate
+
+        elif name == "Accelerated Depreciation (§179/Bonus)":
+            tgt = cfg.get("target","")
+            if tgt.startswith("Schedule C"):     mrate = marginal_rate_for_bucket("SC")     if auto_marginal else manual_marginal_rate
+            elif tgt.startswith("S-Corp"):       mrate = marginal_rate_for_bucket("K1S")    if auto_marginal else manual_marginal_rate
+            elif tgt.startswith("Partnership"):  mrate = marginal_rate_for_bucket("K1P")    if auto_marginal else manual_marginal_rate
+            else:                                mrate = marginal_rate_for_bucket("ITEMIZED") if auto_marginal else manual_marginal_rate
+            per_strategy_theoretical[name] = amt * mrate
+
         elif cfg["type"] == "captive_831b":
             tgt = cfg.get("target","")
-            if tgt.startswith("Schedule C"):
-                mrate = marginal_rate_for_bucket("SC") if auto_marginal else manual_marginal_rate
-            elif tgt.startswith("S-Corp"):
-                mrate = marginal_rate_for_bucket("K1S") if auto_marginal else manual_marginal_rate
-            elif tgt.startswith("Partnership"):
-                mrate = marginal_rate_for_bucket("K1P") if auto_marginal else manual_marginal_rate
-            else:
-                mrate = marginal_rate_for_bucket("ITEMIZED") if auto_marginal else manual_marginal_rate
+            if tgt.startswith("Schedule C"):     mrate = marginal_rate_for_bucket("SC")     if auto_marginal else manual_marginal_rate
+            elif tgt.startswith("S-Corp"):       mrate = marginal_rate_for_bucket("K1S")    if auto_marginal else manual_marginal_rate
+            elif tgt.startswith("Partnership"):  mrate = marginal_rate_for_bucket("K1P")    if auto_marginal else manual_marginal_rate
+            else:                                mrate = marginal_rate_for_bucket("ITEMIZED") if auto_marginal else manual_marginal_rate
             per_strategy_theoretical[name] = amt * mrate
+
         else:
             typ = cfg["type"]
             if typ == "deduction_sc":
-                mrate = marginal_rate_for_bucket("SC") if auto_marginal else manual_marginal_rate
+                # Honor target bucket for generic deduction_sc items, too
+                tgt = cfg.get("target","")
+                if tgt.startswith("Schedule C"):     mrate = marginal_rate_for_bucket("SC")     if auto_marginal else manual_marginal_rate
+                elif tgt.startswith("S-Corp"):       mrate = marginal_rate_for_bucket("K1S")    if auto_marginal else manual_marginal_rate
+                elif tgt.startswith("Partnership"):  mrate = marginal_rate_for_bucket("K1P")    if auto_marginal else manual_marginal_rate
+                else:                                mrate = marginal_rate_for_bucket("ITEMIZED") if auto_marginal else manual_marginal_rate
                 per_strategy_theoretical[name] = amt * mrate
             elif typ == "deduction_itemized":
                 mrate = marginal_rate_for_bucket("ITEMIZED") if auto_marginal else manual_marginal_rate
@@ -449,18 +507,24 @@ def tax_with_subset(active_keys):
             if ent.startswith("S-Corp"):        k1s = scorp_k1 - amt   # allow negative
             elif ent.startswith("Partnership"): k1p = partner_k1 - amt # allow negative
             elif ent.startswith("Schedule C"):  sc  = schc_1099 - amt  # allow negative
+
         elif typ == "captive_831b":
             tgt = cfg.get("target","")
             if tgt.startswith("Schedule C"):     sc  = schc_1099 - amt
             elif tgt.startswith("S-Corp"):       k1s = scorp_k1 - amt
             elif tgt.startswith("Partnership"):  k1p = partner_k1 - amt
             else:                                it  = itemized + amt
+
         elif typ == "deduction_sc":
             tgt = cfg.get("target","")
-            if tgt.startswith("Schedule"):       sc = schc_1099 - amt  # allow negative
-            else:                                it = itemized + amt
+            if tgt.startswith("Schedule C"):     sc  = schc_1099 - amt
+            elif tgt.startswith("S-Corp"):       k1s = scorp_k1 - amt
+            elif tgt.startswith("Partnership"):  k1p = partner_k1 - amt
+            else:                                it  = itemized + amt
+
         elif typ == "deduction_itemized":
             it = itemized + amt
+
         elif typ == "income_increase":
             oi = other_income_base + amt
 
@@ -853,4 +917,4 @@ if st.button("📄 Generate Client PDF Summary"):
         mime="application/pdf"
     )
 
-st.caption("Amatore & Co © 2025 • Federal + State planner v7.5. Planning tool only; confirm positions before filing.")
+st.caption("Amatore & Co © 2025 • Federal + State planner v7.6. Planning tool only; confirm positions before filing.")
