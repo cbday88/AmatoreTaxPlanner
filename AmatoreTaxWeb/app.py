@@ -1,10 +1,14 @@
-# Amatore & Co — Tax Planning Calculator v7.6.9
+# Amatore & Co — Tax Planning Calculator v7.7.0
 # Single-file Streamlit app
 # ------------------------------------------------------------
-# New in v7.6.9
-# - Added "Owner W-2 (S-Corp)" with a toggle to include/exclude from baseline.
-# - When excluded, it's shown for planning context (JSON/PDF note) but not in tax math.
-# Prior: auto state effective %, Oil & Gas strategy with ROI, always-visible exports/PDF, 2023–2025 tabs.
+# New in v7.7.0
+# - Added Payments & Withholding:
+#   • Federal Withholding, Federal Estimated Payments
+#   • State Withholding, State Estimated Payments
+# - Shows net positions: Amount Due / Refund (Federal, State, Combined)
+# - Flows through on-screen metrics, JSON snapshot, and PDF summary
+# Prior: Owner W-2 (S-Corp) toggle, S-Corp K-1 Ordinary, Oil & Gas as Strategy (ROI uses it),
+#        auto state effective %, always-visible Export/PDF, 2023–2025 tabs.
 # ------------------------------------------------------------
 
 from __future__ import annotations
@@ -42,6 +46,12 @@ class TaxInputs:
     employee_401k_deferral: float = 0.0
     traditional_ira_contribution: float = 0.0
 
+    # Payments & Withholding
+    fed_withholding: float = 0.0
+    fed_estimated: float = 0.0
+    state_withholding: float = 0.0
+    state_estimated: float = 0.0
+
     # Business context for certain strategies
     reasonable_comp_w2_owner: float = 0.0
 
@@ -54,6 +64,14 @@ class BaselineResult:
     state_tax: float
     total_tax: float
     marginal_rate: float
+
+    # Payments / Balances
+    federal_payments: float
+    state_payments: float
+    total_payments: float
+    federal_balance_due: float   # >0 amount owed, <0 refund
+    state_balance_due: float
+    combined_balance_due: float
 
 
 @dataclass
@@ -187,8 +205,29 @@ def compute_baseline(inputs: TaxInputs) -> BaselineResult:
     state_tax = round(taxable_income * (inputs.state_effective_rate_pct / 100.0), 2)
     total_tax = round(fed_tax + state_tax, 2)
 
-    return BaselineResult(agi=round(agi,2), taxable_income=round(taxable_income,2), federal_tax=fed_tax,
-                          state_tax=state_tax, total_tax=total_tax, marginal_rate=marginal_rate)
+    # Payments & Balances
+    fed_payments = float(inputs.fed_withholding) + float(inputs.fed_estimated)
+    st_payments = float(inputs.state_withholding) + float(inputs.state_estimated)
+    total_payments = fed_payments + st_payments
+
+    federal_balance_due = round(fed_tax - fed_payments, 2)    # >0 owe, <0 refund
+    state_balance_due = round(state_tax - st_payments, 2)
+    combined_balance_due = round((fed_tax + state_tax) - total_payments, 2)
+
+    return BaselineResult(
+        agi=round(agi,2),
+        taxable_income=round(taxable_income,2),
+        federal_tax=fed_tax,
+        state_tax=state_tax,
+        total_tax=total_tax,
+        marginal_rate=marginal_rate,
+        federal_payments=round(fed_payments,2),
+        state_payments=round(st_payments,2),
+        total_payments=round(total_payments,2),
+        federal_balance_due=federal_balance_due,
+        state_balance_due=state_balance_due,
+        combined_balance_due=combined_balance_due,
+    )
 
 
 # =============================
@@ -267,18 +306,18 @@ def strat_oil_gas_idc(baseline: BaselineResult, inputs: TaxInputs, investment_am
 # Streamlit UI (Multi-Year Tabs)
 # =============================
 
-st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.6.9", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.7.0", page_icon="📊", layout="wide")
 
-st.title("Amatore & Co — Tax Planning Calculator v7.6.9")
+st.title("Amatore & Co — Tax Planning Calculator v7.7.0")
 st.caption("Planning-only estimates. For educational use; not tax advice.")
 
 with st.expander("About this version"):
     st.markdown(
         """
-        **What's new (v7.6.9)**
-        - Owner W-2 (S-Corp) input with include/exclude toggle for baseline.
-        - Keeps auto state effective %, Oil & Gas as strategy (ROI pulls from it), and always-visible exports/PDF.
-        - Active rules only (ordinary income rates).
+        **What's new (v7.7.0)**
+        - Federal/State withholding and estimated payments.
+        - Net positions (amount due / refund) shown on-screen, JSON, and PDF.
+        - Keeps: Owner W-2 toggle, S-Corp K-1, Oil & Gas strategy (ROI uses it), auto state effective %, exports/PDF, 2023–2025 tabs.
         """
     )
 
@@ -339,7 +378,7 @@ def render_year_page(year: int, key_prefix: str = ""):
     k1_ordinary = st.sidebar.number_input("Partnership/Other K-1 Ordinary", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}k1")
     rental_net = st.sidebar.number_input("Rental Real Estate Net (Sch E)", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}rent")
 
-    # New: Owner W-2 (S-Corp) for planning (optionally included in baseline)
+    # Owner W-2 (S-Corp) for planning (optionally included in baseline)
     owner_w2_scorp = st.sidebar.number_input("Owner W-2 (S-Corp)", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}owner_w2")
     include_owner_w2 = st.sidebar.checkbox("Include Owner W-2 in baseline", value=False, key=f"{key_prefix}owner_w2_include")
 
@@ -361,6 +400,13 @@ def render_year_page(year: int, key_prefix: str = ""):
     pre_401k = st.sidebar.number_input("Employee 401(k) Deferral (traditional)", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}401k")
     pre_ira = st.sidebar.number_input("Traditional IRA Contribution", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}ira")
 
+    # NEW: Payments & Withholding
+    st.sidebar.subheader("Payments & Withholding")
+    fed_withhold = st.sidebar.number_input("Federal Withholding (W-2/1099)", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}fed_wh")
+    fed_est = st.sidebar.number_input("Federal Estimated Payments", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}fed_est")
+    st_withhold = st.sidebar.number_input("State Withholding", min_value=0.0, value=0.0, step=250.0, key=f"{key_prefix}st_wh")
+    st_est = st.sidebar.number_input("State Estimated Payments", min_value=0.0, value=0.0, step=250.0, key=f"{key_prefix}st_est")
+
     # Engagement & ROI (non-strategy items)
     st.sidebar.subheader("Engagement & ROI")
     planning_fee = st.sidebar.number_input("Client Plan Fee ($)", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}fee")
@@ -380,10 +426,15 @@ def render_year_page(year: int, key_prefix: str = ""):
         state_effective_rate_pct=state_rate,
         employee_401k_deferral=pre_401k,
         traditional_ira_contribution=pre_ira,
+        fed_withholding=fed_withhold,
+        fed_estimated=fed_est,
+        state_withholding=st_withhold,
+        state_estimated=st_est,
     )
 
     base = compute_baseline(inputs)
 
+    # Top metrics (tax & marginal)
     mcols = st.columns(6)
     mcols[0].metric("AGI", f"${base.agi:,.2f}")
     mcols[1].metric("Taxable Income", f"${base.taxable_income:,.2f}")
@@ -391,6 +442,15 @@ def render_year_page(year: int, key_prefix: str = ""):
     mcols[3].metric("State Tax", f"${base.state_tax:,.2f}")
     mcols[4].metric("Total Tax", f"${base.total_tax:,.2f}")
     mcols[5].metric("Marginal Rate", f"{int(base.marginal_rate*100)}%")
+
+    # Payment summary & net positions
+    pcols = st.columns(6)
+    pcols[0].metric("Fed Payments", f"${base.federal_payments:,.2f}")
+    pcols[1].metric("Fed Balance", ("DUE " if base.federal_balance_due>0 else "REFUND ") + f"${abs(base.federal_balance_due):,.2f}")
+    pcols[2].metric("State Payments", f"${base.state_payments:,.2f}")
+    pcols[3].metric("State Balance", ("DUE " if base.state_balance_due>0 else "REFUND ") + f"${abs(base.state_balance_due):,.2f}")
+    pcols[4].metric("All Payments", f"${base.total_payments:,.2f}")
+    pcols[5].metric("Combined", ("DUE " if base.combined_balance_due>0 else "REFUND ") + f"${abs(base.combined_balance_due):,.2f}")
 
     st.divider()
 
@@ -520,7 +580,7 @@ def render_year_page(year: int, key_prefix: str = ""):
     st.download_button("Download CSV", csv_buf.getvalue(), file_name=f"strategy_savings_{year}.csv", mime="text/csv")
 
     snapshot = {
-        "version": "v7.6.9",
+        "version": "v7.7.0",
         "year": year,
         "client": {"name": client_name, "id": client_id, "preparer": preparer, "notes": notes_meta, "state": state_selected},
         "engagement": {"planning_fee": planning_fee, "oil_gas": oilgas_invest, "other_invest": other_invest,
@@ -539,10 +599,28 @@ def render_year_page(year: int, key_prefix: str = ""):
             "k1_ordinary": k1_ordinary,
             "rental_net": rental_net,
         },
+        "payments": {
+            "federal_withholding": fed_withhold,
+            "federal_estimated": fed_est,
+            "state_withholding": st_withhold,
+            "state_estimated": st_est,
+            "federal_total": base.federal_payments,
+            "state_total": base.state_payments,
+            "all_payments": base.total_payments,
+        },
         "inputs": asdict(inputs),
         "baseline": asdict(base),
         "strategies": [asdict(s) for s in strategy_results],
-        "totals": {"federal": total_fed, "state": total_state, "all": total_all, "projected_investment_gain": projected_investment_gain, "roi_percent": roi_pct},
+        "totals": {
+            "federal_tax": base.federal_tax,
+            "state_tax": base.state_tax,
+            "total_tax": base.total_tax,
+            "federal_balance_due": base.federal_balance_due,
+            "state_balance_due": base.state_balance_due,
+            "combined_balance_due": base.combined_balance_due,
+            "projected_investment_gain": projected_investment_gain,
+            "roi_percent": roi_pct,
+        },
     }
     st.download_button("Download JSON Snapshot", data=json.dumps(snapshot, indent=2),
                        file_name=f"amatore_tax_planner_{year}_snapshot.json", mime="application/json")
@@ -570,7 +648,7 @@ def render_year_page(year: int, key_prefix: str = ""):
 
         c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Baseline"); y -= 0.22*inch
         c.setFont('Helvetica', 10)
-        c.drawString(1*inch, y, f"AGI: ${base.agi:,.2f}   Taxable: ${base.taxable_income:,.2f}   Fed: ${base.federal_tax:,.2f}   State: ${base.state_tax:,.2f}   Total: ${base.total_tax:,.2f}")
+        c.drawString(1*inch, y, f"AGI: ${base.agi:,.2f}   Taxable: ${base.taxable_income:,.2f}   Fed Tax: ${base.federal_tax:,.2f}   State Tax: ${base.state_tax:,.2f}   Total: ${base.total_tax:,.2f}")
         y -= 0.3*inch
 
         c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Income Breakdown"); y -= 0.22*inch
@@ -593,7 +671,25 @@ def render_year_page(year: int, key_prefix: str = ""):
             if y < 1.2*inch:
                 c.showPage(); y = height - 1*inch
 
+        # Payments & Balances
+        if y < 1.6*inch:
+            c.showPage(); y = height - 1*inch
+        c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Payments & Withholding"); y -= 0.22*inch
+        c.setFont('Helvetica', 10)
+        c.drawString(1*inch, y, f"Federal Payments: ${base.federal_payments:,.2f}  (Withholding ${fed_withhold:,.2f} + Estimates ${fed_est:,.2f})"); y -= 0.18*inch
+        c.drawString(1*inch, y, f"State Payments:   ${base.state_payments:,.2f}  (Withholding ${st_withhold:,.2f} + Estimates ${st_est:,.2f})"); y -= 0.18*inch
+
+        # Balances
+        c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Balances"); y -= 0.22*inch
+        c.setFont('Helvetica', 10)
+        c.drawString(1*inch, y, f"Federal: {'DUE' if base.federal_balance_due>0 else 'REFUND'} ${abs(base.federal_balance_due):,.2f}"); y -= 0.18*inch
+        c.drawString(1*inch, y, f"State:   {'DUE' if base.state_balance_due>0 else 'REFUND'} ${abs(base.state_balance_due):,.2f}"); y -= 0.18*inch
+        c.drawString(1*inch, y, f"Combined: {'DUE' if base.combined_balance_due>0 else 'REFUND'} ${abs(base.combined_balance_due):,.2f}"); y -= 0.22*inch
+
+        # Strategies
         if strategy_results:
+            if y < 1.6*inch:
+                c.showPage(); y = height - 1*inch
             c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Strategies"); y -= 0.22*inch
             c.setFont('Helvetica', 10)
             for s in strategy_results:
@@ -605,18 +701,18 @@ def render_year_page(year: int, key_prefix: str = ""):
                 if y < 1.2*inch:
                     c.showPage(); y = height - 1*inch
 
+        # ROI
+        if y < 1.6*inch:
+            c.showPage(); y = height - 1*inch
         c.setFont('Helvetica-Bold', 12)
-        c.drawString(1*inch, y, f"Total Strategy Savings: ${total_all:,.2f}")
-        y -= 0.22*inch
-
-        # ROI block
-        c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Return on Investment (ROI)"); y -= 0.22*inch
+        c.drawString(1*inch, y, f"Total Strategy Savings: ${total_all:,.2f}"); y -= 0.22*inch
+        c.drawString(1*inch, y, "Return on Investment (ROI)"); y -= 0.22*inch
         c.setFont('Helvetica', 10)
         c.drawString(1*inch, y, f"Planning Fee: ${planning_fee:,.2f}"); y -= 0.18*inch
         c.drawString(1*inch, y, f"Invested Principal — Oil & Gas: ${oilgas_invest:,.2f}"); y -= 0.18*inch
         c.drawString(1*inch, y, f"Invested Principal — Other: ${other_invest:,.2f}"); y -= 0.18*inch
         c.drawString(1*inch, y, f"Projection: {int(proj_years)} yrs @ {exp_return_pct:.1f}% → Projected Investment Gain: ${projected_investment_gain:,.2f}"); y -= 0.18*inch
-        c.drawString(1*inch, y, f"Total Costs: ${total_costs:,.2f}"); y -= 0.18*inch
+        c.drawString(1*inch, y, f"Total Costs: ${ (planning_fee + oilgas_invest + other_invest):,.2f}"); y -= 0.18*inch
         c.drawString(1*inch, y, f"ROI %: {(roi_pct or 0.0):,.2f}%")
 
         c.showPage(); c.save(); pdf_bytes.seek(0)
@@ -637,7 +733,7 @@ with tabs[2]:
 
 st.markdown("---")
 
-with st.expander("Implementation Notes & To-Do for v7.7"):
+with st.expander("Implementation Notes & To-Do for v7.8"):
     st.markdown(
         """
         - Add preferential LTCG/qualified-dividends rate module per year.
@@ -647,4 +743,3 @@ with st.expander("Implementation Notes & To-Do for v7.7"):
         - Login/client save + paywall (lightweight backend/auth).
         """
     )
-
