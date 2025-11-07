@@ -1,13 +1,11 @@
-# Amatore & Co — Tax Planning Calculator v7.6.5 (States + ROI + Always-on PDF)
+# Amatore & Co — Tax Planning Calculator v7.6.7
 # Single-file Streamlit app
 # ------------------------------------------------------------
-# New in v7.6.5
-# - State dropdown restored (with manual Effective % entry)
-# - Engagement & ROI panel (Client Plan Fee, Oil & Gas, Other investment,
-#   expected annual return %, projection years)
-# - ROI displayed on-screen and included in PDF
-# - Export & PDF buttons are ALWAYS visible (even with zero strategies)
-# - Keeps robust 2025 standard deduction/lookup fixes from 7.6.4
+# New in v7.6.7
+# - State dropdown auto-fills an editable "State Effective %" (firm-configurable)
+# - Oil & Gas modeled as a Strategy; ROI pulls principal from that strategy
+# - ROI/Exports/PDF always visible (even with zero strategies)
+# - Ordinary-income-only engine for now (active rules only)
 # ------------------------------------------------------------
 
 from __future__ import annotations
@@ -75,8 +73,24 @@ class StrategyResult:
 # =============================
 
 STATES = [
-    "AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"
+    "AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI",
+    "MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+    "VA","WA","WV","WI","WY"
 ]
+
+# Firm-configurable EFFECTIVE state rate defaults (% of taxable income).
+# These are planning placeholders (not statutory brackets). Edit to your firm's norms.
+# If a state is missing/None, the app will fall back to a manual entry default of 0.0.
+STATE_EFFECTIVE_DEFAULTS: Dict[str, Optional[float]] = {
+    # No-income-tax states (0 as effective baseline)
+    "AK": 0.0, "FL": 0.0, "NV": 0.0, "NH": 0.0, "SD": 0.0, "TN": 0.0, "TX": 0.0, "WA": 0.0, "WY": 0.0,
+    # Common effective-rate baselines (editable)
+    "AL": 3.0, "AR": 3.5, "AZ": 2.5, "CA": 6.5, "CO": 3.0, "CT": 4.5, "DC": 5.5, "DE": 4.0, "GA": 4.0,
+    "HI": 4.0, "ID": 3.5, "IL": 4.5, "IN": 3.5, "IA": 4.0, "KS": 4.0, "KY": 3.5, "LA": 3.0, "ME": 4.0,
+    "MD": 4.0, "MA": 4.5, "MI": 3.5, "MN": 5.0, "MS": 3.0, "MO": 3.0, "MT": 3.5, "NE": 4.0, "NJ": 5.0,
+    "NM": 3.5, "NY": 6.0, "NC": 3.5, "ND": 2.5, "OH": 3.0, "OK": 3.0, "OR": 6.0, "PA": 3.1, "RI": 4.0,
+    "SC": 3.5, "UT": 3.5, "VT": 4.0, "VA": 4.0, "WV": 3.5, "WI": 4.0,
+}
 
 # 2023 & 2024 populated; 2025 values loaded.
 FEDERAL_STD_DEDUCTION = {
@@ -248,24 +262,65 @@ def strat_employee_deferral(baseline: BaselineResult, inputs: TaxInputs, plan_ty
                           notes=f"Modeled contribution ${contrib:,.2f}.")
 
 
+def strat_oil_gas_idc(baseline: BaselineResult, inputs: TaxInputs, investment_amount: float, idc_percent: float,
+                      description_override: Optional[str] = None) -> StrategyResult:
+    amt = max(0.0, float(investment_amount))
+    pct = max(0.0, min(100.0, float(idc_percent))) / 100.0
+    deductible = amt * pct
+    fed_save = round(deductible * baseline.marginal_rate, 2)
+    st_save = _state_savings(deductible, inputs.state_effective_rate_pct)
+    desc = description_override or ("Oil & Gas IDC deduction modeled at entered % of investment; ordinary-rate savings shown.")
+    return StrategyResult(name="Oil & Gas (IDC)", description=desc, change_in_taxable_income=-deductible,
+                          federal_tax_savings=fed_save, state_tax_savings=st_save,
+                          total_savings=round(fed_save+st_save,2),
+                          notes=f"Investment ${amt:,.2f} with IDC {pct*100:.0f}% → deductible ${deductible:,.2f}.")
+
+
 # =============================
-# Streamlit UI (Multi‑Year Tabs)
+# Streamlit UI (Multi-Year Tabs)
 # =============================
 
-st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.6.5", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.6.7", page_icon="📊", layout="wide")
 
-st.title("Amatore & Co — Tax Planning Calculator v7.6.5")
+st.title("Amatore & Co — Tax Planning Calculator v7.6.7")
 st.caption("Planning-only estimates. For educational use; not tax advice.")
 
 with st.expander("About this version"):
     st.markdown(
         """
-        **What's new (v7.6.5)**
-        - State dropdown + effective % field.
-        - Engagement & ROI panel (plan fee, investments, expected % and years).
-        - ROI shown on-screen and in PDF; exports visible even with 0 strategies.
-        - 2023/2024 tables + 2025 values loaded (updateable). Robust type safety.
+        **What's new (v7.6.7)**
+        - Auto state effective % from dropdown (editable; firm-configurable).
+        - Oil & Gas moved to Strategies; ROI uses that strategy's amount.
+        - ROI, Export, and PDF always visible.
+        - Active rules only (ordinary income rates).
         """
+    )
+
+
+def _state_rate_input(key_prefix: str, state_selected: str) -> float:
+    """
+    Auto-populate an editable number_input from STATE_EFFECTIVE_DEFAULTS.
+    Preserves user overrides via Streamlit session state.
+    """
+    rate_key = f"{key_prefix}state_effective_rate"
+    default = STATE_EFFECTIVE_DEFAULTS.get(state_selected, 0.0)
+
+    # Initialize only once per session/key to avoid fighting user edits on reruns
+    if rate_key not in st.session_state:
+        st.session_state[rate_key] = float(default or 0.0)
+
+    # If user changes the state, refresh to mapped default (but still editable)
+    # Detect change by storing last state:
+    last_state_key = f"{key_prefix}last_state"
+    last_state = st.session_state.get(last_state_key)
+    if last_state != state_selected:
+        st.session_state[rate_key] = float(default or 0.0)
+        st.session_state[last_state_key] = state_selected
+
+    return st.number_input(
+        "State Effective % (auto from state; editable)",
+        min_value=0.0, max_value=15.0, step=0.1, format="%.1f",
+        key=rate_key
     )
 
 
@@ -288,7 +343,9 @@ def render_year_page(year: int, key_prefix: str = ""):
         st.number_input("Tax Year", min_value=2023, max_value=2026, value=year, step=1, key=f"{key_prefix}ty", disabled=True)
     with col_fs2:
         state_selected = st.selectbox("State", STATES, index=STATES.index("CA") if "CA" in STATES else 0, key=f"{key_prefix}state_sel")
-    state_rate = st.number_input("State Effective % (enter your effective rate)", min_value=0.0, max_value=15.0, value=0.0, step=0.1, format="%.1f", key=f"{key_prefix}state")
+
+    # Auto-populated, editable state effective rate
+    state_rate = _state_rate_input(key_prefix, state_selected)
 
     st.sidebar.subheader("Income — Personal & Business")
     # Personal
@@ -319,10 +376,9 @@ def render_year_page(year: int, key_prefix: str = ""):
     pre_401k = st.sidebar.number_input("Employee 401(k) Deferral (traditional)", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}401k")
     pre_ira = st.sidebar.number_input("Traditional IRA Contribution", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}ira")
 
-    # Engagement & ROI
+    # Engagement & ROI (non-strategy items)
     st.sidebar.subheader("Engagement & ROI")
     planning_fee = st.sidebar.number_input("Client Plan Fee ($)", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}fee")
-    oil_gas = st.sidebar.number_input("Oil & Gas Investment", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}oilgas")
     other_invest = st.sidebar.number_input("Other Investment", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}otherinv")
     exp_return_pct = st.sidebar.number_input("Expected Annual Return %", min_value=0.0, max_value=50.0, value=0.0, step=0.1, format="%.1f", key=f"{key_prefix}retpct")
     proj_years = st.sidebar.number_input("Projection Years", min_value=1, max_value=50, value=1, step=1, key=f"{key_prefix}years")
@@ -357,6 +413,7 @@ def render_year_page(year: int, key_prefix: str = ""):
     st.caption("Note: Current engine treats all income at ordinary rates. Preferential LTCG/Qualified Div module coming next.")
 
     strategy_results: List[StrategyResult] = []
+    oilgas_invest = 0.0  # set by Oil & Gas strategy if used
 
     # Augusta Rule
     with st.expander("Augusta Rule (§280A(g))"):
@@ -370,7 +427,7 @@ def render_year_page(year: int, key_prefix: str = ""):
         if (aug_rate > 0) and (aug_days > 0):
             strategy_results.append(strat_augusta_rule(base, inputs, aug_rate, int(aug_days)))
 
-    # Section 179
+    # Section 179 (Accelerated Expensing)
     with st.expander("Section 179 (Accelerated Expensing)"):
         s1, s2 = st.columns(2)
         with s1:
@@ -380,6 +437,18 @@ def render_year_page(year: int, key_prefix: str = ""):
         st.caption("Simplified model — ignores phaseouts/limitations. Update for full compliance as needed.")
         if elect_179 > 0:
             strategy_results.append(strat_section_179(base, inputs, eq_cost, elect_179))
+
+    # Oil & Gas (Intangible Drilling Costs) — strategy-driven
+    with st.expander("Oil & Gas (Intangible Drilling Costs)"):
+        og1, og2 = st.columns(2)
+        with og1:
+            oilgas_amount = st.number_input("Investment Amount ($)", min_value=0.0, value=0.0, step=5000.0, key=f"{key_prefix}og_amt")
+        with og2:
+            idc_pct = st.number_input("IDC Deductible %", min_value=0.0, max_value=100.0, value=80.0, step=5.0, key=f"{key_prefix}og_pct")
+        st.caption("Models immediate deduction of the IDC portion of investment at ordinary rates (planning estimate).")
+        if oilgas_amount > 0 and idc_pct > 0:
+            oilgas_invest = oilgas_amount
+            strategy_results.append(strat_oil_gas_idc(base, inputs, oilgas_amount, idc_pct))
 
     # Captive Insurance 831(b)
     with st.expander("Captive Insurance (§831(b))"):
@@ -412,7 +481,7 @@ def render_year_page(year: int, key_prefix: str = ""):
     tcols[2].metric("Total Savings", f"${total_all:,.2f}")
 
     # ROI calculations (always show)
-    principal = oil_gas + other_invest
+    principal = oilgas_invest + other_invest
     rate = exp_return_pct / 100.0
     fv = principal * ((1 + rate) ** proj_years)
     projected_investment_gain = max(0.0, fv - principal)
@@ -420,11 +489,12 @@ def render_year_page(year: int, key_prefix: str = ""):
     total_gain = total_all + projected_investment_gain
     roi_pct = (total_gain / total_costs * 100.0) if total_costs > 0 else None
 
-    rcols = st.columns(4)
+    rcols = st.columns(5)
     rcols[0].metric("Planning Fee", f"${planning_fee:,.2f}")
-    rcols[1].metric("Invested (principal)", f"${principal:,.2f}")
-    rcols[2].metric("Proj. Investment Gain", f"${projected_investment_gain:,.2f}")
-    rcols[3].metric("ROI %", f"{roi_pct:,.2f}%" if roi_pct is not None else "—")
+    rcols[1].metric("Oil & Gas Principal", f"${oilgas_invest:,.2f}")
+    rcols[2].metric("Other Investment", f"${other_invest:,.2f}")
+    rcols[3].metric("Proj. Investment Gain", f"${projected_investment_gain:,.2f}")
+    rcols[4].metric("ROI %", f"{roi_pct:,.2f}%" if roi_pct is not None else "—")
 
     st.markdown("---")
 
@@ -464,20 +534,14 @@ def render_year_page(year: int, key_prefix: str = ""):
     st.download_button("Download CSV", csv_buf.getvalue(), file_name=f"strategy_savings_{year}.csv", mime="text/csv")
 
     snapshot = {
-        "version": "v7.6.5",
+        "version": "v7.6.7",
         "year": year,
         "client": {"name": client_name, "id": client_id, "preparer": preparer, "notes": notes_meta, "state": state_selected},
-        "engagement": {"planning_fee": planning_fee, "oil_gas": oil_gas, "other_invest": other_invest, "expected_return_pct": exp_return_pct, "years": int(proj_years)},
+        "engagement": {"planning_fee": planning_fee, "oil_gas": oilgas_invest, "other_invest": other_invest,
+                       "expected_return_pct": exp_return_pct, "years": int(proj_years)},
         "income_breakdown": {
-            "w2": wages,
-            "interest": interest_inc,
-            "dividends_ordinary": div_ordinary,
-            "dividends_qualified": div_qualified,
-            "short_term_gains": stcg,
-            "long_term_gains": ltcg,
-            "schedule_c": se_income,
-            "k1_ordinary": k1_ordinary,
-            "rental_net": rental_net,
+            "w2": wages, "interest": interest_inc, "dividends_ordinary": div_ordinary, "dividends_qualified": div_qualified,
+            "short_term_gains": stcg, "long_term_gains": ltcg, "schedule_c": se_income, "k1_ordinary": k1_ordinary, "rental_net": rental_net,
         },
         "inputs": asdict(inputs),
         "baseline": asdict(base),
@@ -515,8 +579,8 @@ def render_year_page(year: int, key_prefix: str = ""):
 
         c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Income Breakdown"); y -= 0.22*inch
         c.setFont('Helvetica', 10)
-        for label, val in [("W-2 Wages", wages),("Interest", interest_inc),("Dividends (Ord)", div_ordinary),("Dividends (Qual)", div_qualified),
-                           ("Cap Gains (ST)", stcg),("Cap Gains (LT)", ltcg),("Schedule C", se_income),("K-1 Ordinary", k1_ordinary),("Rental Net", rental_net)]:
+        for label, val in [("W-2 Wages", wages), ("Interest", interest_inc), ("Dividends (Ord)", div_ordinary), ("Dividends (Qual)", div_qualified),
+                           ("Cap Gains (ST)", stcg), ("Cap Gains (LT)", ltcg), ("Schedule C", se_income), ("K-1 Ordinary", k1_ordinary), ("Rental Net", rental_net)]:
             c.drawString(1*inch, y, f"{label}: ${val:,.2f}")
             y -= 0.18*inch
             if y < 1.2*inch:
@@ -542,7 +606,8 @@ def render_year_page(year: int, key_prefix: str = ""):
         c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Return on Investment (ROI)"); y -= 0.22*inch
         c.setFont('Helvetica', 10)
         c.drawString(1*inch, y, f"Planning Fee: ${planning_fee:,.2f}"); y -= 0.18*inch
-        c.drawString(1*inch, y, f"Invested Principal (Oil & Gas + Other): ${principal:,.2f}"); y -= 0.18*inch
+        c.drawString(1*inch, y, f"Invested Principal — Oil & Gas: ${oilgas_invest:,.2f}"); y -= 0.18*inch
+        c.drawString(1*inch, y, f"Invested Principal — Other: ${other_invest:,.2f}"); y -= 0.18*inch
         c.drawString(1*inch, y, f"Projection: {int(proj_years)} yrs @ {exp_return_pct:.1f}% → Projected Investment Gain: ${projected_investment_gain:,.2f}"); y -= 0.18*inch
         c.drawString(1*inch, y, f"Total Costs: ${total_costs:,.2f}"); y -= 0.18*inch
         c.drawString(1*inch, y, f"ROI %: {(roi_pct or 0.0):,.2f}%")
@@ -555,7 +620,6 @@ def render_year_page(year: int, key_prefix: str = ""):
 
 
 # Render multi-year tabs
-
 tabs = st.tabs(["2023", "2024", "2025"])
 with tabs[0]:
     render_year_page(2023, key_prefix="y23_")
@@ -566,7 +630,7 @@ with tabs[2]:
 
 st.markdown("---")
 
-with st.expander("Implementation Notes & To‑Do for v7.7"):
+with st.expander("Implementation Notes & To-Do for v7.7"):
     st.markdown(
         """
         - Add preferential LTCG/qualified-dividends rate module per year.
@@ -576,3 +640,4 @@ with st.expander("Implementation Notes & To‑Do for v7.7"):
         - Login/client save + paywall (lightweight backend/auth).
         """
     )
+
