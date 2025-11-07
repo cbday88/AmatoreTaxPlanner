@@ -1,14 +1,12 @@
-# Amatore & Co — Tax Planning Calculator v7.7.4
+# Amatore & Co — Tax Planning Calculator v7.7.5
 # ------------------------------------------------------------
-# What's new in v7.7.4
-# - Shows separate balance chips for **Federal** and **State**, plus **Combined**,
-#   for BOTH Before and After scenarios (color-coded):
-#     • Green = Refund (negative)
-#     • Orange = Due but < $30,000
-#     • Red    = Due ≥ $30,000
-# - Adds Federal/State balances to the Summary Table and PDF.
-# - Keeps all features from v7.7.3: recomputed AFTER scenario, S-Corp vs Partnership K-1,
-#   summary table, fee payment plan (calendar year), legal statements, etc.
+# What's new in v7.7.5
+# - Adds a color-coded Summary Table to the PDF:
+#   * Refund (negative) = green background
+#   * Due < $30,000     = orange background
+#   * Due ≥ $30,000     = red background
+# - Keeps v7.7.4 features: separate Federal/State/Combined chips, S-Corp vs Partnership K-1,
+#   recomputed AFTER scenario, summary table in-app, fee plan, legal statements, etc.
 # ------------------------------------------------------------
 
 from __future__ import annotations
@@ -296,16 +294,15 @@ def color_badge(value: float) -> str:
 # Streamlit UI
 # =============================
 
-st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.7.4", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.7.5", page_icon="📊", layout="wide")
 
-st.title("Amatore & Co — Tax Planning Calculator v7.7.4")
+st.title("Amatore & Co — Tax Planning Calculator v7.7.5")
 st.caption("Planning-only estimates. For educational use; not tax advice.")
 
 with st.expander("About this version"):
     st.markdown(
         """
-        **v7.7.4** — Adds separate Federal/State balance chips (and Combined), in both Before and After views,
-        plus PDF & summary table updates.
+        **v7.7.5** — PDF now includes a color-coded Summary Table for balances (refund vs due).
         """
     )
 
@@ -482,7 +479,6 @@ def render_year_page(year: int, key_prefix: str = ""):
     m1[4].metric("Total Tax", f"${before.total_tax:,.2f}")
     with m1[5]:
         st.markdown(color_badge(before.combined_balance_due), unsafe_allow_html=True)
-    # NEW: separate chips row
     chips_row1 = st.columns(3)
     with chips_row1[0]:
         st.markdown("**Federal Balance**")
@@ -504,7 +500,6 @@ def render_year_page(year: int, key_prefix: str = ""):
     m2[4].metric("Total Tax", f"${after.total_tax:,.2f}")
     with m2[5]:
         st.markdown(color_badge(after.combined_balance_due), unsafe_allow_html=True)
-    # NEW: separate chips row
     chips_row2 = st.columns(3)
     with chips_row2[0]:
         st.markdown("**Federal Balance**")
@@ -518,7 +513,7 @@ def render_year_page(year: int, key_prefix: str = ""):
 
     st.markdown("---")
 
-    # Summary table (Before vs After) — now includes separate balances
+    # Summary table (Before vs After) — includes separate balances
     import pandas as pd
     tbl = pd.DataFrame([
         ["Taxable Income", before.taxable_income, after.taxable_income, after.taxable_income - before.taxable_income],
@@ -581,7 +576,7 @@ def render_year_page(year: int, key_prefix: str = ""):
     st.download_button("Download CSV", csv_buf.getvalue(), file_name=f"strategy_savings_{year}.csv", mime="text/csv")
 
     snapshot = {
-        "version": "v7.7.4",
+        "version": "v7.7.5",
         "year": year,
         "client": {"name": client_name, "id": client_id, "preparer": preparer, "notes": notes_meta, "state": state_selected},
         "engagement": {
@@ -616,11 +611,22 @@ def render_year_page(year: int, key_prefix: str = ""):
     st.download_button("Download JSON Snapshot", data=json.dumps(snapshot, indent=2),
                        file_name=f"amatore_tax_planner_{year}_snapshot.json", mime="application/json")
 
-    # ----------------- Simple PDF (Client) -----------------
+    # ----------------- Simple PDF (Client) with Color-Coded Summary Table -----------------
     try:
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas as rl_canvas
         from reportlab.lib.units import inch
+        from reportlab.lib import colors
+        from reportlab.platypus import Table, TableStyle
+
+        def money(v: float) -> str:
+            return f"${v:,.2f}"
+
+        def cell_bg_for_balance(v: float):
+            # green for refund (<0), orange for due < 30k, red otherwise
+            if v < 0:
+                return colors.HexColor("#1a7f37")
+            return colors.HexColor("#d97706") if v < 30000 else colors.HexColor("#dc2626")
 
         pdf_bytes = io.BytesIO()
         c = rl_canvas.Canvas(pdf_bytes, pagesize=letter)
@@ -654,36 +660,102 @@ def render_year_page(year: int, key_prefix: str = ""):
 
         # Before/After — taxable & tax
         line("Taxable Income", size=12, bold=True, dy=0.24)
-        line(f"Before Strategies: ${before.taxable_income:,.2f}", dy=0.18)
-        line(f"After  Strategies: ${after.taxable_income:,.2f}", dy=0.22)
+        line(f"Before Strategies: {money(before.taxable_income)}", dy=0.18)
+        line(f"After  Strategies: {money(after.taxable_income)}", dy=0.22)
 
         line("Total Tax", size=12, bold=True, dy=0.24)
-        line(f"Before: ${before.total_tax:,.2f}", dy=0.18)
-        line(f"After : ${after.total_tax:,.2f}", dy=0.22)
+        line(f"Before: {money(before.total_tax)}", dy=0.18)
+        line(f"After : {money(after.total_tax)}", dy=0.22)
 
-        # NEW: Separate balances in PDF
+        # Separate balances
         line("Balances (positive = DUE, negative = REFUND)", size=12, bold=True, dy=0.24)
-        line(f"Federal — Before: ${before.federal_balance_due:,.2f}     After: ${after.federal_balance_due:,.2f}", dy=0.18)
-        line(f"State   — Before: ${before.state_balance_due:,.2f}     After: ${after.state_balance_due:,.2f}", dy=0.18)
-        line(f"Combined— Before: ${before.combined_balance_due:,.2f}   After: ${after.combined_balance_due:,.2f}", dy=0.22)
+        line(f"Federal — Before: {money(before.federal_balance_due)}     After: {money(after.federal_balance_due)}", dy=0.18)
+        line(f"State   — Before: {money(before.state_balance_due)}     After: {money(after.state_balance_due)}", dy=0.18)
+        line(f"Combined— Before: {money(before.combined_balance_due)}   After: {money(after.combined_balance_due)}", dy=0.22)
 
         # ROI
         rate_txt = f"{exp_return_pct:.1f}%"
         line("Return on Investment (ROI)", size=12, bold=True, dy=0.24)
-        line(f"Tax Savings from Strategies: ${recomputed_tax_savings:,.2f}", dy=0.18)
-        line(f"Invested Principal (Oil & Gas + Other): ${ (oilgas_invest + other_invest):,.2f}", dy=0.18)
-        line(f"Projected Investment Gain ({rate_txt} for {int(proj_years)} yrs): ${projected_investment_gain:,.2f}", dy=0.18)
-        line(f"Planning Fee: ${planning_fee:,.2f}", dy=0.18)
-        line(f"Payment Plan: {int(fee_months)} monthly payments of ${monthly_payment:,.2f} (to be paid within calendar year {year})", dy=0.22)
+        line(f"Tax Savings from Strategies: {money(recomputed_tax_savings)}", dy=0.18)
+        line(f"Invested Principal (Oil & Gas + Other): {money(oilgas_invest + other_invest)}", dy=0.18)
+        line(f"Projected Investment Gain ({rate_txt} for {int(proj_years)} yrs): {money(projected_investment_gain)}", dy=0.18)
+        line(f"Planning Fee: {money(planning_fee)}", dy=0.18)
+        line(f"Payment Plan: {int(fee_months)} monthly payments of {money(monthly_payment)} (to be paid within calendar year {year})", dy=0.22)
         if roi_pct is not None:
             line(f"ROI %: {roi_pct:,.2f}%", dy=0.22)
 
+        # --- Color-coded Summary Table ---
+        # Build table data
+        pdf_tbl_data = [
+            ["Metric", "Before", "After", "Δ After - Before"],
+            ["Taxable Income", money(before.taxable_income), money(after.taxable_income), money(after.taxable_income - before.taxable_income)],
+            ["Federal Tax",    money(before.federal_tax),    money(after.federal_tax),    money(after.federal_tax - before.federal_tax)],
+            ["State Tax",      money(before.state_tax),      money(after.state_tax),      money(after.state_tax - before.state_tax)],
+            ["Total Tax",      money(before.total_tax),      money(after.total_tax),      money(after.total_tax - before.total_tax)],
+            ["Federal Balance (Due+/Refund-)",  money(before.federal_balance_due),  money(after.federal_balance_due),  money(after.federal_balance_due - before.federal_balance_due)],
+            ["State Balance (Due+/Refund-)",    money(before.state_balance_due),    money(after.state_balance_due),    money(after.state_balance_due - before.state_balance_due)],
+            ["Combined Balance (Due+/Refund-)", money(before.combined_balance_due), money(after.combined_balance_due), money(after.combined_balance_due - before.combined_balance_due)],
+        ]
+
+        # Create Table
+        table = Table(pdf_tbl_data, colWidths=[2.75*inch, 1.4*inch, 1.4*inch, 1.6*inch])
+        style_cmds = [
+            ("FONT", (0,0), (-1,0), "Helvetica-Bold", 10),
+            ("ALIGN", (1,1), (-1,-1), "RIGHT"),
+            ("ALIGN", (0,0), (0,-1), "LEFT"),
+            ("LINEABOVE", (0,0), (-1,0), 1, colors.black),
+            ("LINEBELOW", (0,0), (-1,0), 1, colors.black),
+            ("GRID", (0,0), (-1,-1), 0.25, colors.lightgrey),
+            ("LEFTPADDING", (0,0), (-1,-1), 6),
+            ("RIGHTPADDING", (0,0), (-1,-1), 6),
+            ("TOPPADDING", (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ]
+
+        # Apply background colors to BEFORE/AFTER cells for the three balance rows
+        # Row indices in pdf_tbl_data:
+        # 0 header
+        # 1 taxable, 2 fed tax, 3 state tax, 4 total tax,
+        # 5 federal balance, 6 state balance, 7 combined balance
+        balance_rows = {
+            5: (before.federal_balance_due, after.federal_balance_due),
+            6: (before.state_balance_due, after.state_balance_due),
+            7: (before.combined_balance_due, after.combined_balance_due),
+        }
+        for r, (bval, aval) in balance_rows.items():
+            style_cmds.append(("BACKGROUND", (1, r), (1, r), cell_bg_for_balance(bval)))
+            style_cmds.append(("TEXTCOLOR", (1, r), (1, r), colors.white))
+            style_cmds.append(("BACKGROUND", (2, r), (2, r), cell_bg_for_balance(aval)))
+            style_cmds.append(("TEXTCOLOR", (2, r), (2, r), colors.white))
+
+        table.setStyle(TableStyle(style_cmds))
+
+        # Place table on page (auto-wrap downward)
+        avail_w = width - 2.0*inch
+        avail_h = y - 0.5*inch
+        tw, th = table.wrap(avail_w, avail_h)
+        # If not enough space left, move to next page
+        if th > avail_h:
+            c.showPage()
+            y = height - 1.0*inch
+            avail_h = y - 0.5*inch
+            tw, th = table.wrap(avail_w, avail_h)
+        table.drawOn(c, 1.0*inch, y - th)
+        y = y - th - 0.3*inch
+
         # Legal statements
-        line("Legal / Disclosures", size=12, bold=True, dy=0.24)
-        line("These are planning estimates based on information provided by the client. Results may change if", size=8, dy=0.15)
-        line("inputs change, additional facts emerge, or tax law/interpretations differ. Amatore & Co is not", size=8, dy=0.15)
-        line("responsible for any changes in estimated ROI or outcomes resulting from updated or inaccurate", size=8, dy=0.15)
-        line("information supplied by the client. This document is not tax advice; consult your tax advisor.", size=8, dy=0.18)
+        c.setFont("Helvetica-Bold", 12); c.drawString(1.0*inch, y, "Legal / Disclosures"); y -= 0.22*inch
+        c.setFont("Helvetica", 8)
+        lines = [
+            "These are planning estimates based on information provided by the client. Results may change if inputs change,",
+            "additional facts emerge, or tax law/interpretations differ. Amatore & Co is not responsible for any changes in",
+            "estimated ROI or outcomes resulting from updated or inaccurate information supplied by the client.",
+            "This document is not tax advice; consult your tax advisor."
+        ]
+        for L in lines:
+            c.drawString(1.0*inch, y, L); y -= 0.15*inch
+            if y < 1.0*inch:
+                c.showPage(); y = height - 1.0*inch
 
         c.showPage(); c.save(); pdf_bytes.seek(0)
         st.download_button("Download Client PDF (Simple Summary)", data=pdf_bytes,
