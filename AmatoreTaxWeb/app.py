@@ -167,16 +167,31 @@ FEDERAL_BRACKETS = {
 
 
 def get_std_deduction(tax_year: int, filing_status: str, use_standard: bool, itemized: float) -> float:
+    """Return a numeric standard deduction for the given year/status.
+    Ensures `tax_year` is an int and always returns a float (never a dict)."""
+    try:
+        tax_year = int(tax_year)
+    except Exception:
+        tax_year = 2024
     if not use_standard:
-        return max(0.0, itemized)
+        return float(max(0.0, itemized))
     sd_map = FEDERAL_STD_DEDUCTION.get(tax_year, FEDERAL_STD_DEDUCTION[2024])
-    return sd_map.get(filing_status, sd_map.get("MFJ", 0.0))
+    if isinstance(sd_map, dict):
+        return float(sd_map.get(filing_status, sd_map.get("MFJ", 0.0)))
+    try:
+        return float(sd_map)
+    except Exception:
+        return 0.0
 
 
 def compute_federal_tax(filing_status: str, taxable_income: float, tax_year: int) -> tuple[float, float]:
-    """Returns (federal_tax, marginal_rate). Uses year-aware bracket tables.
-    """
-    ti = max(0.0, taxable_income)
+    """Returns (federal_tax, marginal_rate). Uses year-aware bracket tables with type safety."""
+    try:
+        tax_year = int(tax_year)
+    except Exception:
+        tax_year = 2024
+
+    ti = max(0.0, float(taxable_income))
     tax = 0.0
     marginal = 0.0
 
