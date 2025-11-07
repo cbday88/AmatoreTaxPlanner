@@ -1,11 +1,10 @@
-# Amatore & Co — Tax Planning Calculator v7.6.7
+# Amatore & Co — Tax Planning Calculator v7.6.9
 # Single-file Streamlit app
 # ------------------------------------------------------------
-# New in v7.6.7
-# - State dropdown auto-fills an editable "State Effective %" (firm-configurable)
-# - Oil & Gas modeled as a Strategy; ROI pulls principal from that strategy
-# - ROI/Exports/PDF always visible (even with zero strategies)
-# - Ordinary-income-only engine for now (active rules only)
+# New in v7.6.9
+# - Added "Owner W-2 (S-Corp)" with a toggle to include/exclude from baseline.
+# - When excluded, it's shown for planning context (JSON/PDF note) but not in tax math.
+# Prior: auto state effective %, Oil & Gas strategy with ROI, always-visible exports/PDF, 2023–2025 tabs.
 # ------------------------------------------------------------
 
 from __future__ import annotations
@@ -79,10 +78,9 @@ STATES = [
 ]
 
 # Firm-configurable EFFECTIVE state rate defaults (% of taxable income).
-# These are planning placeholders (not statutory brackets). Edit to your firm's norms.
-# If a state is missing/None, the app will fall back to a manual entry default of 0.0.
+# Planning placeholders (not statutory brackets). Edit to your firm's norms.
 STATE_EFFECTIVE_DEFAULTS: Dict[str, Optional[float]] = {
-    # No-income-tax states (0 as effective baseline)
+    # No-income-tax states
     "AK": 0.0, "FL": 0.0, "NV": 0.0, "NH": 0.0, "SD": 0.0, "TN": 0.0, "TX": 0.0, "WA": 0.0, "WY": 0.0,
     # Common effective-rate baselines (editable)
     "AL": 3.0, "AR": 3.5, "AZ": 2.5, "CA": 6.5, "CO": 3.0, "CT": 4.5, "DC": 5.5, "DE": 4.0, "GA": 4.0,
@@ -122,9 +120,7 @@ FEDERAL_BRACKETS = {
 
 
 def get_std_deduction(tax_year: int, filing_status: str, use_standard: bool, itemized: float) -> float:
-    """Return numeric standard deduction for given year/status with robust coercion.
-    Always returns a float; never a dict/list.
-    """
+    """Return numeric standard deduction for given year/status with robust coercion."""
     try:
         tax_year = int(tax_year)
     except Exception:
@@ -137,18 +133,11 @@ def get_std_deduction(tax_year: int, filing_status: str, use_standard: bool, ite
             return 0.0
 
     sd_map = FEDERAL_STD_DEDUCTION.get(tax_year, FEDERAL_STD_DEDUCTION[2024])
-    if not isinstance(sd_map, dict):
-        try:
-            return float(sd_map)
-        except Exception:
-            return 0.0
-
     val = sd_map.get(filing_status, sd_map.get("MFJ", 0.0))
     if isinstance(val, (list, tuple)):
         val = val[0] if val else 0.0
     elif isinstance(val, dict):
         val = val.get("value", 0.0)
-
     try:
         return float(val)
     except Exception:
@@ -156,7 +145,7 @@ def get_std_deduction(tax_year: int, filing_status: str, use_standard: bool, ite
 
 
 def compute_federal_tax(filing_status: str, taxable_income: float, tax_year: int) -> tuple[float, float]:
-    """Returns (federal_tax, marginal_rate). Uses year-aware bracket tables with type safety."""
+    """Returns (federal_tax, marginal_rate)."""
     try:
         tax_year = int(tax_year)
     except Exception:
@@ -166,8 +155,7 @@ def compute_federal_tax(filing_status: str, taxable_income: float, tax_year: int
     tax = 0.0
     marginal = 0.0
 
-    year_map = FEDERAL_BRACKETS.get(tax_year, FEDERAL_BRACKETS[2024])
-    brackets = year_map.get(filing_status, year_map.get("MFJ"))
+    brackets = FEDERAL_BRACKETS.get(tax_year, FEDERAL_BRACKETS[2024]).get(filing_status, FEDERAL_BRACKETS[2024]["MFJ"])
 
     prev_cap = 0.0
     for cap, rate in brackets:
@@ -193,7 +181,6 @@ def compute_baseline(inputs: TaxInputs) -> BaselineResult:
     )
 
     predeferrals = float(inputs.employee_401k_deferral) + float(inputs.traditional_ira_contribution)
-
     taxable_income = max(0.0, agi - std_or_itemized - predeferrals)
 
     fed_tax, marginal_rate = compute_federal_tax(inputs.filing_status, taxable_income, inputs.tax_year)
@@ -280,43 +267,33 @@ def strat_oil_gas_idc(baseline: BaselineResult, inputs: TaxInputs, investment_am
 # Streamlit UI (Multi-Year Tabs)
 # =============================
 
-st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.6.7", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.6.9", page_icon="📊", layout="wide")
 
-st.title("Amatore & Co — Tax Planning Calculator v7.6.7")
+st.title("Amatore & Co — Tax Planning Calculator v7.6.9")
 st.caption("Planning-only estimates. For educational use; not tax advice.")
 
 with st.expander("About this version"):
     st.markdown(
         """
-        **What's new (v7.6.7)**
-        - Auto state effective % from dropdown (editable; firm-configurable).
-        - Oil & Gas moved to Strategies; ROI uses that strategy's amount.
-        - ROI, Export, and PDF always visible.
+        **What's new (v7.6.9)**
+        - Owner W-2 (S-Corp) input with include/exclude toggle for baseline.
+        - Keeps auto state effective %, Oil & Gas as strategy (ROI pulls from it), and always-visible exports/PDF.
         - Active rules only (ordinary income rates).
         """
     )
 
 
 def _state_rate_input(key_prefix: str, state_selected: str) -> float:
-    """
-    Auto-populate an editable number_input from STATE_EFFECTIVE_DEFAULTS.
-    Preserves user overrides via Streamlit session state.
-    """
+    """Auto-fill editable state effective % from defaults; respects user override."""
     rate_key = f"{key_prefix}state_effective_rate"
     default = STATE_EFFECTIVE_DEFAULTS.get(state_selected, 0.0)
-
-    # Initialize only once per session/key to avoid fighting user edits on reruns
     if rate_key not in st.session_state:
         st.session_state[rate_key] = float(default or 0.0)
-
-    # If user changes the state, refresh to mapped default (but still editable)
-    # Detect change by storing last state:
     last_state_key = f"{key_prefix}last_state"
     last_state = st.session_state.get(last_state_key)
     if last_state != state_selected:
         st.session_state[rate_key] = float(default or 0.0)
         st.session_state[last_state_key] = state_selected
-
     return st.number_input(
         "State Effective % (auto from state; editable)",
         min_value=0.0, max_value=15.0, step=0.1, format="%.1f",
@@ -358,12 +335,20 @@ def render_year_page(year: int, key_prefix: str = ""):
 
     # Business / Pass-through
     se_income = st.sidebar.number_input("Schedule C (Self-Employment) Net", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}schc")
-    k1_ordinary = st.sidebar.number_input("K-1 Ordinary Business Income", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}k1")
+    scorp_k1_ordinary = st.sidebar.number_input("S-Corp K-1 Ordinary", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}sk1")
+    k1_ordinary = st.sidebar.number_input("Partnership/Other K-1 Ordinary", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}k1")
     rental_net = st.sidebar.number_input("Rental Real Estate Net (Sch E)", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}rent")
 
-    # Aggregate for current engine (ordinary brackets only for now; LTCG/Qualified div noted for future module)
-    biz_inc = se_income + k1_ordinary + rental_net
+    # New: Owner W-2 (S-Corp) for planning (optionally included in baseline)
+    owner_w2_scorp = st.sidebar.number_input("Owner W-2 (S-Corp)", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}owner_w2")
+    include_owner_w2 = st.sidebar.checkbox("Include Owner W-2 in baseline", value=False, key=f"{key_prefix}owner_w2_include")
+
+    # Aggregate for current engine (ordinary brackets only for now)
+    biz_inc = se_income + scorp_k1_ordinary + k1_ordinary + rental_net
     other_inc = interest_inc + div_ordinary + stcg + div_qualified + ltcg
+
+    # Apply owner W-2 inclusion choice
+    wages_effective = wages + (owner_w2_scorp if include_owner_w2 else 0.0)
 
     st.sidebar.subheader("Adjustments & Deductions")
     adj = st.sidebar.number_input("Above-the-line Adjustments", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}adj")
@@ -386,7 +371,7 @@ def render_year_page(year: int, key_prefix: str = ""):
     inputs = TaxInputs(
         filing_status=filing_status,
         tax_year=year,
-        wages_w2=wages,
+        wages_w2=wages_effective,  # include owner W-2 only if toggle is on
         business_income=biz_inc,
         other_income=other_inc,
         adjustments=adj,
@@ -489,12 +474,13 @@ def render_year_page(year: int, key_prefix: str = ""):
     total_gain = total_all + projected_investment_gain
     roi_pct = (total_gain / total_costs * 100.0) if total_costs > 0 else None
 
-    rcols = st.columns(5)
+    rcols = st.columns(6)
     rcols[0].metric("Planning Fee", f"${planning_fee:,.2f}")
     rcols[1].metric("Oil & Gas Principal", f"${oilgas_invest:,.2f}")
     rcols[2].metric("Other Investment", f"${other_invest:,.2f}")
-    rcols[3].metric("Proj. Investment Gain", f"${projected_investment_gain:,.2f}")
-    rcols[4].metric("ROI %", f"{roi_pct:,.2f}%" if roi_pct is not None else "—")
+    rcols[3].metric("Proj. Return %", f"{exp_return_pct:.1f}%")
+    rcols[4].metric("Proj. Investment Gain", f"${projected_investment_gain:,.2f}")
+    rcols[5].metric("ROI %", f"{roi_pct:,.2f}%" if roi_pct is not None else "—")
 
     st.markdown("---")
 
@@ -534,14 +520,24 @@ def render_year_page(year: int, key_prefix: str = ""):
     st.download_button("Download CSV", csv_buf.getvalue(), file_name=f"strategy_savings_{year}.csv", mime="text/csv")
 
     snapshot = {
-        "version": "v7.6.7",
+        "version": "v7.6.9",
         "year": year,
         "client": {"name": client_name, "id": client_id, "preparer": preparer, "notes": notes_meta, "state": state_selected},
         "engagement": {"planning_fee": planning_fee, "oil_gas": oilgas_invest, "other_invest": other_invest,
                        "expected_return_pct": exp_return_pct, "years": int(proj_years)},
         "income_breakdown": {
-            "w2": wages, "interest": interest_inc, "dividends_ordinary": div_ordinary, "dividends_qualified": div_qualified,
-            "short_term_gains": stcg, "long_term_gains": ltcg, "schedule_c": se_income, "k1_ordinary": k1_ordinary, "rental_net": rental_net,
+            "w2": wages,
+            "owner_w2_scorp": owner_w2_scorp,
+            "owner_w2_included_in_baseline": include_owner_w2,
+            "interest": interest_inc,
+            "dividends_ordinary": div_ordinary,
+            "dividends_qualified": div_qualified,
+            "short_term_gains": stcg,
+            "long_term_gains": ltcg,
+            "schedule_c": se_income,
+            "scorp_k1_ordinary": scorp_k1_ordinary,
+            "k1_ordinary": k1_ordinary,
+            "rental_net": rental_net,
         },
         "inputs": asdict(inputs),
         "baseline": asdict(base),
@@ -579,8 +575,19 @@ def render_year_page(year: int, key_prefix: str = ""):
 
         c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Income Breakdown"); y -= 0.22*inch
         c.setFont('Helvetica', 10)
-        for label, val in [("W-2 Wages", wages), ("Interest", interest_inc), ("Dividends (Ord)", div_ordinary), ("Dividends (Qual)", div_qualified),
-                           ("Cap Gains (ST)", stcg), ("Cap Gains (LT)", ltcg), ("Schedule C", se_income), ("K-1 Ordinary", k1_ordinary), ("Rental Net", rental_net)]:
+        for label, val in [
+            ("W-2 Wages", wages),
+            (f"Owner W-2 (S-Corp){' [INCLUDED]' if include_owner_w2 else ' [NOT IN BASELINE]'}", owner_w2_scorp),
+            ("Interest", interest_inc),
+            ("Dividends (Ord)", div_ordinary),
+            ("Dividends (Qual)", div_qualified),
+            ("Cap Gains (ST)", stcg),
+            ("Cap Gains (LT)", ltcg),
+            ("Schedule C", se_income),
+            ("S-Corp K-1 Ordinary", scorp_k1_ordinary),
+            ("Partnership/Other K-1 Ordinary", k1_ordinary),
+            ("Rental Net", rental_net),
+        ]:
             c.drawString(1*inch, y, f"{label}: ${val:,.2f}")
             y -= 0.18*inch
             if y < 1.2*inch:
@@ -640,3 +647,4 @@ with st.expander("Implementation Notes & To-Do for v7.7"):
         - Login/client save + paywall (lightweight backend/auth).
         """
     )
+
