@@ -1,12 +1,15 @@
-# Amatore & Co — Tax Planning Calculator v7.7.1
+# Amatore & Co — Tax Planning Calculator v7.7.2
 # Single-file Streamlit app
 # ------------------------------------------------------------
-# New in v7.7.1 (Client-Simple PDF)
-# - Simplified PDF: Strategies (brief), Taxable Income Before/After, Amount Owed Before/After,
-#   ROI summary, and Fee Options.
-# - Fee options are editable in sidebar (Success % and Hybrid % + Fixed).
-# Prior: Payments/withholding, Owner W-2 toggle, S-Corp K-1, Oil & Gas strategy (ROI uses it),
-#        auto state effective %, exports/PDF always visible, 2023–2025 tabs.
+# New in v7.7.2
+# - True AFTER-scenario recomputation:
+#   We apply the total strategy deduction effect to inputs and re-run taxes/payments.
+#   This yields accurate Taxable Income, Taxes, and Balances (Due/Refund) AFTER strategies.
+# - On-screen "Before vs After" panels for Taxable, Total Tax, and Balances.
+# - ROI & Fee Options now use recomputed savings (before.total_tax - after.total_tax).
+# - Simple, client-friendly PDF shows these Before/After figures and the refund/amount due.
+# Prior: Withholdings/estimates, Owner W-2 toggle, S-Corp K-1, Oil & Gas (ROI principal),
+#        auto state effective %, CSV/JSON exports, 2023–2025 tabs.
 # ------------------------------------------------------------
 
 from __future__ import annotations
@@ -19,18 +22,18 @@ from typing import Dict, List, Optional
 import streamlit as st
 
 # =============================
-# Utilities & Core Structures
+# Data Structures
 # =============================
 
 @dataclass
 class TaxInputs:
     filing_status: str = "MFJ"  # MFJ, Single, MFS, HOH
-    tax_year: int = 2024        # Will be locked by tab
+    tax_year: int = 2024
 
     # Income (ordinary bucket for now)
     wages_w2: float = 0.0
-    business_income: float = 0.0  # Sch C / pass-through ordinary
-    other_income: float = 0.0     # ordinary (interest, ordinary div, ST gains, etc.)
+    business_income: float = 0.0
+    other_income: float = 0.0
 
     # Adjustments & Deductions
     adjustments: float = 0.0
@@ -76,7 +79,7 @@ class BaselineResult:
 class StrategyResult:
     name: str
     description: str
-    change_in_taxable_income: float   # negative = decreases taxable income
+    change_in_taxable_income: float   # negative = deduction
     federal_tax_savings: float
     state_tax_savings: float
     total_savings: float
@@ -84,7 +87,7 @@ class StrategyResult:
 
 
 # =============================
-# Reference Data (States, Brackets & Standard Deduction)
+# Reference Data
 # =============================
 
 STATES = [
@@ -93,7 +96,6 @@ STATES = [
     "VA","WA","WV","WI","WY"
 ]
 
-# Firm-configurable EFFECTIVE state rate defaults (% of taxable income).
 STATE_EFFECTIVE_DEFAULTS: Dict[str, Optional[float]] = {
     "AK": 0.0, "FL": 0.0, "NV": 0.0, "NH": 0.0, "SD": 0.0, "TN": 0.0, "TX": 0.0, "WA": 0.0, "WY": 0.0,
     "AL": 3.0, "AR": 3.5, "AZ": 2.5, "CA": 6.5, "CO": 3.0, "CT": 4.5, "DC": 5.5, "DE": 4.0, "GA": 4.0,
@@ -130,6 +132,10 @@ FEDERAL_BRACKETS = {
     },
 }
 
+# =============================
+# Core Calculations
+# =============================
+
 def get_std_deduction(tax_year: int, filing_status: str, use_standard: bool, itemized: float) -> float:
     try:
         tax_year = int(tax_year)
@@ -150,6 +156,7 @@ def get_std_deduction(tax_year: int, filing_status: str, use_standard: bool, ite
         return float(val)
     except Exception:
         return 0.0
+
 
 def compute_federal_tax(filing_status: str, taxable_income: float, tax_year: int) -> tuple[float, float]:
     try:
@@ -173,12 +180,14 @@ def compute_federal_tax(filing_status: str, taxable_income: float, tax_year: int
         marginal = brackets[-1][1]
     return round(tax, 2), marginal
 
+
 def compute_baseline(inputs: TaxInputs) -> BaselineResult:
     gross = float(inputs.wages_w2) + float(inputs.business_income) + float(inputs.other_income)
     agi = max(0.0, gross - float(inputs.adjustments))
     std_or_itemized = get_std_deduction(inputs.tax_year, inputs.filing_status, inputs.use_standard_deduction, inputs.itemized_deductions)
     predeferrals = float(inputs.employee_401k_deferral) + float(inputs.traditional_ira_contribution)
     taxable_income = max(0.0, agi - std_or_itemized - predeferrals)
+
     fed_tax, marginal_rate = compute_federal_tax(inputs.filing_status, taxable_income, inputs.tax_year)
     state_tax = round(taxable_income * (inputs.state_effective_rate_pct / 100.0), 2)
     total_tax = round(fed_tax + state_tax, 2)
@@ -206,8 +215,9 @@ def compute_baseline(inputs: TaxInputs) -> BaselineResult:
         combined_balance_due=combined_balance_due,
     )
 
+
 # =============================
-# Strategy Engines
+# Strategy Engines (planning)
 # =============================
 
 def _state_savings(delta_taxable: float, state_effective_rate_pct: float) -> float:
@@ -219,11 +229,9 @@ def strat_augusta_rule(baseline: BaselineResult, inputs: TaxInputs, fair_daily_r
     rent = max(0.0, float(fair_daily_rate) * days)
     fed_save = round(rent * baseline.marginal_rate, 2)
     st_save = _state_savings(rent, inputs.state_effective_rate_pct)
-    desc = description_override or ("Rent your home to your business up to 14 days — excluded from income; business deducts.")
-    return StrategyResult(name="Augusta Rule", description=desc, change_in_taxable_income=-rent,
-                          federal_tax_savings=fed_save, state_tax_savings=st_save,
-                          total_savings=round(fed_save+st_save,2),
-                          notes=f"FMV ${fair_daily_rate:,.0f} × {days} days = ${rent:,.2f}.")
+    desc = description_override or ("Rent your home to your business up to 14 days — excluded to you; business deducts.")
+    return StrategyResult("Augusta Rule", desc, -rent, fed_save, st_save, round(fed_save+st_save,2),
+                          notes=f"FMV ${fair_daily_rate:,.0f} × {days} = ${rent:,.2f}")
 
 def strat_section_179(baseline: BaselineResult, inputs: TaxInputs, equipment_cost: float, elected_179: float,
                       description_override: Optional[str] = None) -> StrategyResult:
@@ -232,10 +240,8 @@ def strat_section_179(baseline: BaselineResult, inputs: TaxInputs, equipment_cos
     fed_save = round(elected * baseline.marginal_rate, 2)
     st_save = _state_savings(elected, inputs.state_effective_rate_pct)
     desc = description_override or ("Expense qualifying equipment immediately under §179 (subject to limits).")
-    return StrategyResult(name="Section 179", description=desc, change_in_taxable_income=-elected,
-                          federal_tax_savings=fed_save, state_tax_savings=st_save,
-                          total_savings=round(fed_save+st_save,2),
-                          notes=f"Elected ${elected:,.2f} on cost ${equipment_cost:,.2f}.")
+    return StrategyResult("Section 179", desc, -elected, fed_save, st_save, round(fed_save+st_save,2),
+                          notes=f"Elected ${elected:,.2f} on cost ${equipment_cost:,.2f}")
 
 def strat_captive_831b(baseline: BaselineResult, inputs: TaxInputs, annual_premium: float, cap_limit: float = 2900000.0,
                        description_override: Optional[str] = None) -> StrategyResult:
@@ -244,20 +250,17 @@ def strat_captive_831b(baseline: BaselineResult, inputs: TaxInputs, annual_premi
     fed_save = round(deductible * baseline.marginal_rate, 2)
     st_save = _state_savings(deductible, inputs.state_effective_rate_pct)
     desc = description_override or ("Deduct risk-appropriate premiums paid to a qualifying micro-captive (§831(b)).")
-    return StrategyResult(name="Captive Insurance (§831(b))", description=desc, change_in_taxable_income=-deductible,
-                          federal_tax_savings=fed_save, state_tax_savings=st_save,
-                          total_savings=round(fed_save+st_save,2),
-                          notes=f"Modeled deductible premium ${deductible:,.2f} (cap ${cap_limit:,.0f}).")
+    return StrategyResult("Captive Insurance (§831(b))", desc, -deductible, fed_save, st_save, round(fed_save+st_save,2),
+                          notes=f"Deductible premium ${deductible:,.2f} (cap ${cap_limit:,.0f})")
 
 def strat_employee_deferral(baseline: BaselineResult, inputs: TaxInputs, plan_type: str, contribution: float,
                             description_override: Optional[str] = None) -> StrategyResult:
     contrib = max(0.0, float(contribution))
     fed_save = round(contrib * baseline.marginal_rate, 2)
     st_save = _state_savings(contrib, inputs.state_effective_rate_pct)
-    desc = description_override or (f"Shift wages into pre-tax {plan_type} contributions to lower current taxable income.")
-    return StrategyResult(name=f"{plan_type} Deferral", description=desc, change_in_taxable_income=-contrib,
-                          federal_tax_savings=fed_save, state_tax_savings=st_save, total_savings=round(fed_save+st_save,2),
-                          notes=f"Contribution ${contrib:,.2f}.")
+    desc = description_override or (f"Shift wages into pre-tax {plan_type} to lower current taxable income.")
+    return StrategyResult(f"{plan_type} Deferral", desc, -contrib, fed_save, st_save, round(fed_save+st_save,2),
+                          notes=f"Contribution ${contrib:,.2f}")
 
 def strat_oil_gas_idc(baseline: BaselineResult, inputs: TaxInputs, investment_amount: float, idc_percent: float,
                       description_override: Optional[str] = None) -> StrategyResult:
@@ -267,26 +270,25 @@ def strat_oil_gas_idc(baseline: BaselineResult, inputs: TaxInputs, investment_am
     fed_save = round(deductible * baseline.marginal_rate, 2)
     st_save = _state_savings(deductible, inputs.state_effective_rate_pct)
     desc = description_override or ("Deduct the intangible drilling cost (IDC) portion of Oil & Gas investment at ordinary rates.")
-    return StrategyResult(name="Oil & Gas (IDC)", description=desc, change_in_taxable_income=-deductible,
-                          federal_tax_savings=fed_save, state_tax_savings=st_save,
-                          total_savings=round(fed_save+st_save,2),
-                          notes=f"Investment ${amt:,.2f}, IDC {pct*100:.0f}% → deductible ${deductible:,.2f}.")
+    return StrategyResult("Oil & Gas (IDC)", desc, -deductible, fed_save, st_save, round(fed_save+st_save,2),
+                          notes=f"Investment ${amt:,.2f}, IDC {pct*100:.0f}% → deductible ${deductible:,.2f}")
 
 # =============================
-# Streamlit UI (Multi-Year Tabs)
+# Streamlit UI
 # =============================
 
-st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.7.1", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.7.2", page_icon="📊", layout="wide")
 
-st.title("Amatore & Co — Tax Planning Calculator v7.7.1")
+st.title("Amatore & Co — Tax Planning Calculator v7.7.2")
 st.caption("Planning-only estimates. For educational use; not tax advice.")
 
 with st.expander("About this version"):
     st.markdown(
         """
-        **What's new (v7.7.1)** — Simple PDF for clients & team:
-        - Strategies (brief), Taxable Income Before/After, Amount Owed Before/After, ROI, Fee Options.
-        - Keeps: state auto effective %, Oil & Gas as strategy (ROI uses it), withholdings/estimates, Owner W-2 toggle, exports.
+        **v7.7.2** — Accurate **After** recomputation and clear **Due/Refund**:
+        - After taxes & balances now recomputed from inputs with strategy deductions applied.
+        - On-screen Before vs After for taxable, tax, and balances.
+        - ROI/fees use recomputed savings.
         """
     )
 
@@ -303,28 +305,25 @@ def _state_rate_input(key_prefix: str, state_selected: str) -> float:
     return st.number_input("State Effective % (auto from state; editable)", min_value=0.0, max_value=15.0, step=0.1, format="%.1f", key=rate_key)
 
 def render_year_page(year: int, key_prefix: str = ""):
-    st.subheader(f"Baseline Inputs — {year}")
+    st.subheader(f"Inputs — {year}")
     st.sidebar.header(f"Client Inputs — {year}")
 
-    # Client metadata
+    # Client meta
     client_name = st.sidebar.text_input("Client Name", value="", key=f"{key_prefix}client_name")
     client_id = st.sidebar.text_input("Client ID / File #", value="", key=f"{key_prefix}client_id")
     preparer = st.sidebar.text_input("Preparer", value="", key=f"{key_prefix}preparer")
     notes_meta = st.sidebar.text_area("Engagement Notes (short)", value="", key=f"{key_prefix}eng_notes")
 
     filing_status = st.sidebar.selectbox("Filing Status", ["MFJ", "Single", "MFS", "HOH"], index=0, key=f"{key_prefix}fs")
-
     col_fs1, col_fs2 = st.sidebar.columns(2)
     with col_fs1:
         st.number_input("Tax Year", min_value=2023, max_value=2026, value=year, step=1, key=f"{key_prefix}ty", disabled=True)
     with col_fs2:
         state_selected = st.selectbox("State", STATES, index=STATES.index("CA") if "CA" in STATES else 0, key=f"{key_prefix}state_sel")
-
-    # Auto/Editable state effective rate
     state_rate = _state_rate_input(key_prefix, state_selected)
 
+    # Income
     st.sidebar.subheader("Income — Personal & Business")
-    # Personal
     wages = st.sidebar.number_input("W-2 Wages", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}w2")
     interest_inc = st.sidebar.number_input("Interest Income (1099-INT)", min_value=0.0, value=0.0, step=250.0, key=f"{key_prefix}int")
     div_ordinary = st.sidebar.number_input("Dividends (Ordinary)", min_value=0.0, value=0.0, step=250.0, key=f"{key_prefix}divo")
@@ -332,21 +331,20 @@ def render_year_page(year: int, key_prefix: str = ""):
     stcg = st.sidebar.number_input("Capital Gains (Short-Term)", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}stcg")
     ltcg = st.sidebar.number_input("Capital Gains (Long-Term)", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}ltcg")
 
-    # Business / Pass-through
     se_income = st.sidebar.number_input("Schedule C (Self-Employment) Net", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}schc")
     scorp_k1_ordinary = st.sidebar.number_input("S-Corp K-1 Ordinary", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}sk1")
     k1_ordinary = st.sidebar.number_input("Partnership/Other K-1 Ordinary", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}k1")
     rental_net = st.sidebar.number_input("Rental Real Estate Net (Sch E)", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}rent")
 
-    # Owner W-2 (S-Corp) optional include
+    # Owner W-2 (S-Corp) toggle include
     owner_w2_scorp = st.sidebar.number_input("Owner W-2 (S-Corp)", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}owner_w2")
     include_owner_w2 = st.sidebar.checkbox("Include Owner W-2 in baseline", value=False, key=f"{key_prefix}owner_w2_include")
 
-    # Aggregate for current engine (ordinary rates only for now)
     biz_inc = se_income + scorp_k1_ordinary + k1_ordinary + rental_net
     other_inc = interest_inc + div_ordinary + stcg + div_qualified + ltcg
     wages_effective = wages + (owner_w2_scorp if include_owner_w2 else 0.0)
 
+    # Adjustments & Deductions
     st.sidebar.subheader("Adjustments & Deductions")
     adj = st.sidebar.number_input("Above-the-line Adjustments", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}adj")
     use_std = st.sidebar.checkbox("Use Standard Deduction", value=True, key=f"{key_prefix}use_std")
@@ -354,6 +352,7 @@ def render_year_page(year: int, key_prefix: str = ""):
     if not use_std:
         itemized = st.sidebar.number_input("Itemized Deductions", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}item")
 
+    # Retirement
     st.sidebar.subheader("Pre-Strategy Retirement (optional)")
     pre_401k = st.sidebar.number_input("Employee 401(k) Deferral (traditional)", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}401k")
     pre_ira = st.sidebar.number_input("Traditional IRA Contribution", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}ira")
@@ -365,7 +364,7 @@ def render_year_page(year: int, key_prefix: str = ""):
     st_withhold = st.sidebar.number_input("State Withholding", min_value=0.0, value=0.0, step=250.0, key=f"{key_prefix}st_wh")
     st_est = st.sidebar.number_input("State Estimated Payments", min_value=0.0, value=0.0, step=250.0, key=f"{key_prefix}st_est")
 
-    # Engagement, ROI & Fee Options
+    # Engagement, ROI & Fees
     st.sidebar.subheader("Engagement & ROI")
     planning_fee = st.sidebar.number_input("Client Plan Fee ($)", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}fee")
     other_invest = st.sidebar.number_input("Other Investment", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}otherinv")
@@ -377,51 +376,22 @@ def render_year_page(year: int, key_prefix: str = ""):
     hybrid_fixed = st.sidebar.number_input("Option C: Hybrid Fixed ($)", min_value=0.0, value=max(0.0, planning_fee/2), step=250.0, key=f"{key_prefix}fee_hybrid_fixed")
     hybrid_pct = st.sidebar.number_input("Option C: Hybrid % of Savings", min_value=0.0, max_value=100.0, value=10.0, step=1.0, key=f"{key_prefix}fee_hybrid_pct")
 
-    # Build inputs
+    # Build inputs and compute BEFORE
     inputs = TaxInputs(
-        filing_status=filing_status,
-        tax_year=year,
-        wages_w2=wages_effective,
-        business_income=biz_inc,
-        other_income=other_inc,
-        adjustments=adj,
-        itemized_deductions=itemized,
-        use_standard_deduction=use_std,
+        filing_status=filing_status, tax_year=year,
+        wages_w2=wages_effective, business_income=biz_inc, other_income=other_inc,
+        adjustments=adj, itemized_deductions=itemized, use_standard_deduction=use_std,
         state_effective_rate_pct=state_rate,
-        employee_401k_deferral=pre_401k,
-        traditional_ira_contribution=pre_ira,
-        fed_withholding=fed_withhold,
-        fed_estimated=fed_est,
-        state_withholding=st_withhold,
-        state_estimated=st_est,
+        employee_401k_deferral=pre_401k, traditional_ira_contribution=pre_ira,
+        fed_withholding=fed_withhold, fed_estimated=fed_est, state_withholding=st_withhold, state_estimated=st_est
     )
+    before = compute_baseline(inputs)
 
-    base = compute_baseline(inputs)
-
-    # Top metrics
-    mcols = st.columns(6)
-    mcols[0].metric("AGI", f"${base.agi:,.2f}")
-    mcols[1].metric("Taxable Income", f"${base.taxable_income:,.2f}")
-    mcols[2].metric("Federal Tax", f"${base.federal_tax:,.2f}")
-    mcols[3].metric("State Tax", f"${base.state_tax:,.2f}")
-    mcols[4].metric("Total Tax", f"${base.total_tax:,.2f}")
-    mcols[5].metric("Marginal Rate", f"{int(base.marginal_rate*100)}%")
-
-    pcols = st.columns(6)
-    pcols[0].metric("Fed Payments", f"${base.federal_payments:,.2f}")
-    pcols[1].metric("Fed Balance", ("DUE " if base.federal_balance_due>0 else "REFUND ") + f"${abs(base.federal_balance_due):,.2f}")
-    pcols[2].metric("State Payments", f"${base.state_payments:,.2f}")
-    pcols[3].metric("State Balance", ("DUE " if base.state_balance_due>0 else "REFUND ") + f"${abs(base.state_balance_due):,.2f}")
-    pcols[4].metric("All Payments", f"${base.total_payments:,.2f}")
-    pcols[5].metric("Combined", ("DUE " if base.combined_balance_due>0 else "REFUND ") + f"${abs(base.combined_balance_due):,.2f}")
-
-    st.divider()
-
-    # Strategies
+    # Strategies UI
     st.subheader(f"Strategies — {year}")
-    st.caption("Current engine treats all income at ordinary rates.")
+    st.caption("All income treated at ordinary rates in this planning model.")
     strategy_results: List[StrategyResult] = []
-    oilgas_invest = 0.0  # from Oil & Gas strategy, used in ROI
+    oilgas_invest = 0.0
 
     with st.expander("Augusta Rule (§280A(g))"):
         c1, c2, c3 = st.columns([1,1,2])
@@ -430,9 +400,9 @@ def render_year_page(year: int, key_prefix: str = ""):
         with c2:
             aug_days = st.number_input("Days (max 14)", min_value=0, max_value=14, value=0, step=1, key=f"{key_prefix}aug_days")
         with c3:
-            st.caption("Rent personal residence to your business up to 14 days/year.")
+            st.caption("Rent your home to the business up to 14 days/year (excluded to you; deductible to the business).")
         if (aug_rate > 0) and (aug_days > 0):
-            strategy_results.append(strat_augusta_rule(base, inputs, aug_rate, int(aug_days)))
+            strategy_results.append(strat_augusta_rule(before, inputs, aug_rate, int(aug_days)))
 
     with st.expander("Section 179 (Accelerated Expensing)"):
         s1, s2 = st.columns(2)
@@ -441,7 +411,7 @@ def render_year_page(year: int, key_prefix: str = ""):
         with s2:
             elect_179 = st.number_input("Elect §179 Amount", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}179_elect")
         if elect_179 > 0:
-            strategy_results.append(strat_section_179(base, inputs, eq_cost, elect_179))
+            strategy_results.append(strat_section_179(before, inputs, eq_cost, elect_179))
 
     with st.expander("Oil & Gas (Intangible Drilling Costs)"):
         og1, og2 = st.columns(2)
@@ -452,7 +422,7 @@ def render_year_page(year: int, key_prefix: str = ""):
         st.caption("Immediate deduction of the IDC portion (planning estimate).")
         if oilgas_amount > 0 and idc_pct > 0:
             oilgas_invest = oilgas_amount
-            strategy_results.append(strat_oil_gas_idc(base, inputs, oilgas_amount, idc_pct))
+            strategy_results.append(strat_oil_gas_idc(before, inputs, oilgas_amount, idc_pct))
 
     with st.expander("Captive Insurance (§831(b))"):
         c1, c2 = st.columns(2)
@@ -461,51 +431,62 @@ def render_year_page(year: int, key_prefix: str = ""):
         with c2:
             cap = st.number_input("§831(b) Annual Limit", min_value=500000.0, max_value=5000000.0, value=2900000.0, step=50000.0, key=f"{key_prefix}cap_limit")
         if premium > 0:
-            strategy_results.append(strat_captive_831b(base, inputs, premium, cap))
+            strategy_results.append(strat_captive_831b(before, inputs, premium, cap))
 
     with st.expander("Additional Employee Retirement Deferral"):
         plan = st.selectbox("Plan Type", ["401(k)", "403(b)", "457(b)", "Simple IRA"], index=0, key=f"{key_prefix}plan")
         addl_def = st.number_input("Additional Pre-tax Contribution", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}addl_def")
         if addl_def > 0:
-            strategy_results.append(strat_employee_deferral(base, inputs, plan, addl_def))
+            strategy_results.append(strat_employee_deferral(before, inputs, plan, addl_def))
 
-    # --------- Totals / ROI ----------
-    total_fed = sum(s.federal_tax_savings for s in strategy_results)
-    total_state = sum(s.state_tax_savings for s in strategy_results)
-    total_all = sum(s.total_savings for s in strategy_results)
-    total_delta_taxable = sum(s.change_in_taxable_income for s in strategy_results)  # negative lowers taxable
+    # Totals from strategy cards (delta taxable is negative when reducing)
+    total_delta_taxable = sum(s.change_in_taxable_income for s in strategy_results)  # usually negative
+    # Build AFTER inputs by applying strategy deduction as extra adjustment
+    # If total_delta_taxable = -50,000, we *increase* adjustments by +50,000 to reduce taxable
+    strategy_adjustment = -total_delta_taxable
+    inputs_after = TaxInputs(**{**asdict(inputs), "adjustments": inputs.adjustments + max(0.0, strategy_adjustment)})
+    after = compute_baseline(inputs_after)
 
-    after_taxable_income = max(0.0, base.taxable_income + total_delta_taxable)
-    after_total_tax = max(0.0, base.total_tax - total_all)  # subtract combined savings
-    after_combined_balance = round(after_total_tax - base.total_payments, 2)
+    # Recomputed savings from BEFORE to AFTER
+    recomputed_tax_savings = max(0.0, before.total_tax - after.total_tax)
 
-    tcols = st.columns(4)
-    tcols[0].metric("Federal Savings", f"${total_fed:,.2f}")
-    tcols[1].metric("State Savings", f"${total_state:,.2f}")
-    tcols[2].metric("Total Savings", f"${total_all:,.2f}")
-    tcols[3].metric("Δ Taxable Income", f"${total_delta_taxable:,.2f}")
-
-    # ROI (uses Oil & Gas investment + Other Investment)
-    principal = oilgas_invest + other_invest
+    # ROI uses recomputed savings (plus investment growth if modeled)
     rate = exp_return_pct / 100.0
-    fv = principal * ((1 + rate) ** proj_years)
+    principal = oilgas_invest + other_invest
+    fv = principal * ((1 + rate) ** int(proj_years))
     projected_investment_gain = max(0.0, fv - principal)
     total_costs = planning_fee + principal
-    total_gain = total_all + projected_investment_gain
+    total_gain = recomputed_tax_savings + projected_investment_gain
     roi_pct = (total_gain / total_costs * 100.0) if total_costs > 0 else None
 
-    rcols = st.columns(6)
-    rcols[0].metric("Planning Fee", f"${planning_fee:,.2f}")
-    rcols[1].metric("Oil & Gas Principal", f"${oilgas_invest:,.2f}")
-    rcols[2].metric("Other Investment", f"${other_invest:,.2f}")
-    rcols[3].metric("Proj. Return %", f"{exp_return_pct:.1f}%")
-    rcols[4].metric("Proj. Investment Gain", f"${projected_investment_gain:,.2f}")
-    rcols[5].metric("ROI %", f"{roi_pct:,.2f}%" if roi_pct is not None else "—")
+    # ---- Top metrics (BEFORE) ----
+    st.subheader("Summary — Before (no strategies)")
+    m1 = st.columns(6)
+    m1[0].metric("AGI", f"${before.agi:,.2f}")
+    m1[1].metric("Taxable Income", f"${before.taxable_income:,.2f}")
+    m1[2].metric("Federal Tax", f"${before.federal_tax:,.2f}")
+    m1[3].metric("State Tax", f"${before.state_tax:,.2f}")
+    m1[4].metric("Total Tax", f"${before.total_tax:,.2f}")
+    m1[5].metric("Combined Balance", ("DUE " if before.combined_balance_due>0 else "REFUND ") + f"${abs(before.combined_balance_due):,.2f}")
+
+    st.subheader("Summary — After (with strategies)")
+    m2 = st.columns(6)
+    m2[0].metric("AGI", f"${after.agi:,.2f}")
+    m2[1].metric("Taxable Income", f"${after.taxable_income:,.2f}")
+    m2[2].metric("Federal Tax", f"${after.federal_tax:,.2f}")
+    m2[3].metric("State Tax", f"${after.state_tax:,.2f}")
+    m2[4].metric("Total Tax", f"${after.total_tax:,.2f}")
+    m2[5].metric("Combined Balance", ("DUE " if after.combined_balance_due>0 else "REFUND ") + f"${abs(after.combined_balance_due):,.2f}")
 
     st.markdown("---")
+    three = st.columns(3)
+    three[0].metric("Tax Savings from Strategies", f"${recomputed_tax_savings:,.2f}")
+    three[1].metric("Projected Investment Gain", f"${projected_investment_gain:,.2f}")
+    three[2].metric("ROI %", f"{roi_pct:,.2f}%" if roi_pct is not None else "—")
 
-    # Strategy cards (optional visual)
+    # Optional per-strategy cards
     if strategy_results:
+        st.markdown("#### Strategies added")
         for s in strategy_results:
             with st.container(border=True):
                 st.markdown(f"**{s.name}** — {s.description}")
@@ -514,26 +495,28 @@ def render_year_page(year: int, key_prefix: str = ""):
                 c2.metric("Federal", f"${s.federal_tax_savings:,.2f}")
                 c3.metric("State", f"${s.state_tax_savings:,.2f}")
                 c4.metric("Total", f"${s.total_savings:,.2f}")
+                if s.notes:
+                    st.caption(s.notes)
     else:
-        st.info("No strategies added yet — exports & PDF are still available below.")
+        st.info("No strategies added yet.")
 
-    # ----------------- Export (ALWAYS visible) -----------------
+    # ----------------- Export -----------------
     st.markdown("### Export")
     import pandas as pd
     df = pd.DataFrame([{
         "Strategy": s.name,
         "Description": s.description,
         "Delta Taxable": s.change_in_taxable_income,
-        "Federal Savings": s.federal_tax_savings,
-        "State Savings": s.state_tax_savings,
-        "Total Savings": s.total_savings,
+        "Federal Savings (est.)": s.federal_tax_savings,
+        "State Savings (est.)": s.state_tax_savings,
+        "Total Savings (est.)": s.total_savings,
         "Notes": s.notes or "",
     } for s in strategy_results])
     csv_buf = io.StringIO(); df.to_csv(csv_buf, index=False)
     st.download_button("Download CSV", csv_buf.getvalue(), file_name=f"strategy_savings_{year}.csv", mime="text/csv")
 
     snapshot = {
-        "version": "v7.7.1",
+        "version": "v7.7.2",
         "year": year,
         "client": {"name": client_name, "id": client_id, "preparer": preparer, "notes": notes_meta, "state": state_selected},
         "engagement": {
@@ -546,36 +529,20 @@ def render_year_page(year: int, key_prefix: str = ""):
                 "option_c_hybrid_pct": hybrid_pct,
             }
         },
-        "income_breakdown": {
-            "w2": wages,
-            "owner_w2_scorp": owner_w2_scorp,
-            "owner_w2_included_in_baseline": include_owner_w2,
-            "interest": interest_inc,
-            "dividends_ordinary": div_ordinary,
-            "dividends_qualified": div_qualified,
-            "short_term_gains": stcg,
-            "long_term_gains": ltcg,
-            "schedule_c": se_income,
-            "scorp_k1_ordinary": scorp_k1_ordinary,
-            "k1_ordinary": k1_ordinary,
-            "rental_net": rental_net,
-        },
-        "payments": {
-            "federal_withholding": fed_withhold, "federal_estimated": fed_est,
-            "state_withholding": st_withhold, "state_estimated": st_est,
-            "federal_total": base.federal_payments, "state_total": base.state_payments, "all_payments": base.total_payments,
-        },
-        "inputs": asdict(inputs),
-        "baseline": asdict(base),
+        "inputs_before": asdict(inputs),
+        "baseline_before": asdict(before),
         "strategies": [asdict(s) for s in strategy_results],
+        "strategy_total_delta_taxable": total_delta_taxable,
+        "inputs_after": asdict(inputs_after),
+        "baseline_after": asdict(after),
         "summary": {
-            "taxable_before": base.taxable_income,
-            "taxable_after": after_taxable_income,
-            "total_tax_before": base.total_tax,
-            "total_tax_after": after_total_tax,
-            "amount_owed_before": base.combined_balance_due,
-            "amount_owed_after": after_combined_balance,
-            "total_savings": total_all,
+            "taxable_before": before.taxable_income,
+            "taxable_after": after.taxable_income,
+            "total_tax_before": before.total_tax,
+            "total_tax_after": after.total_tax,
+            "amount_owed_before": before.combined_balance_due,
+            "amount_owed_after": after.combined_balance_due,
+            "tax_savings_recomputed": recomputed_tax_savings,
             "projected_investment_gain": projected_investment_gain,
             "roi_percent": roi_pct,
         }
@@ -583,16 +550,16 @@ def render_year_page(year: int, key_prefix: str = ""):
     st.download_button("Download JSON Snapshot", data=json.dumps(snapshot, indent=2),
                        file_name=f"amatore_tax_planner_{year}_snapshot.json", mime="application/json")
 
-    # ----------------- Simple PDF (ALWAYS visible) -----------------
+    # ----------------- Simple PDF (Client) -----------------
     try:
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas as rl_canvas
         from reportlab.lib.units import inch
 
-        # Fee option computed amounts:
+        # Fees based on recomputed savings
         option_a_fixed = planning_fee
-        option_b_amt = (success_fee_pct/100.0) * total_all
-        option_c_amt = hybrid_fixed + (hybrid_pct/100.0) * total_all
+        option_b_amt = (success_fee_pct/100.0) * recomputed_tax_savings
+        option_c_amt = hybrid_fixed + (hybrid_pct/100.0) * recomputed_tax_savings
 
         pdf_bytes = io.BytesIO()
         c = rl_canvas.Canvas(pdf_bytes, pagesize=letter)
@@ -601,23 +568,18 @@ def render_year_page(year: int, key_prefix: str = ""):
 
         def line(txt, size=10, bold=False, dy=0.18):
             nonlocal y
-            if bold:
-                c.setFont("Helvetica-Bold", size)
-            else:
-                c.setFont("Helvetica", size)
+            c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
             c.drawString(1.0*inch, y, txt)
             y -= dy*inch
             if y < 1.0*inch:
                 c.showPage()
                 y = height - 1.0*inch
 
-        # Header
         line(f"Amatore & Co — Client Tax Planning Summary ({year})", size=14, bold=True, dy=0.30)
         line(f"Client: {client_name or '—'}    File#: {client_id or '—'}    Preparer: {preparer or '—'}    State: {state_selected}", dy=0.22)
         if notes_meta:
             line(f"Notes: {notes_meta[:100]}", dy=0.22)
 
-        # Strategies (brief)
         line("Recommended Strategies", size=12, bold=True, dy=0.24)
         if strategy_results:
             for s in strategy_results:
@@ -627,41 +589,39 @@ def render_year_page(year: int, key_prefix: str = ""):
         else:
             line("• (None added yet)", dy=0.18)
 
-        # Taxable Income Before/After
         line("Taxable Income", size=12, bold=True, dy=0.24)
-        line(f"Before Strategies: ${base.taxable_income:,.2f}", dy=0.18)
-        line(f"After  Strategies: ${after_taxable_income:,.2f}", dy=0.22)
+        line(f"Before Strategies: ${before.taxable_income:,.2f}", dy=0.18)
+        line(f"After  Strategies: ${after.taxable_income:,.2f}", dy=0.22)
 
-        # Amount Owed Before/After (uses your payments/withholding)
-        line("Amount Owed (or Refund if negative)", size=12, bold=True, dy=0.24)
-        line(f"Before Strategies: ${base.combined_balance_due:,.2f}", dy=0.18)
-        line(f"After  Strategies: ${after_combined_balance:,.2f}", dy=0.22)
+        line("Total Tax", size=12, bold=True, dy=0.24)
+        line(f"Before: ${before.total_tax:,.2f}", dy=0.18)
+        line(f"After : ${after.total_tax:,.2f}", dy=0.22)
 
-        # ROI
+        line("Amount Owed (positive = DUE, negative = REFUND)", size=12, bold=True, dy=0.24)
+        line(f"Before: ${before.combined_balance_due:,.2f}", dy=0.18)
+        line(f"After : ${after.combined_balance_due:,.2f}", dy=0.22)
+
         line("Return on Investment (ROI)", size=12, bold=True, dy=0.24)
+        line(f"Tax Savings from Strategies: ${recomputed_tax_savings:,.2f}", dy=0.18)
+        line(f"Invested Principal (Oil & Gas + Other): ${ (oilgas_invest + other_invest):,.2f}", dy=0.18)
+        line(f"Projected Investment Gain ({exp_return_pct:.1f}% for {int(proj_years)} yrs): ${projected_investment_gain:,.2f}", dy=0.18)
         line(f"Planning Fee: ${planning_fee:,.2f}", dy=0.18)
-        line(f"Projected Investment Gain (on ${oilgas_invest+other_invest:,.2f} @ {exp_return_pct:.1f}% for {int(proj_years)} yrs): "
-             f"${projected_investment_gain:,.2f}", dy=0.18)
-        line(f"Tax Savings from Strategies: ${total_all:,.2f}", dy=0.18)
         line(f"ROI %: {(roi_pct or 0.0):,.2f}%", dy=0.22)
 
-        # Fee Options
         line("Fee Options", size=12, bold=True, dy=0.24)
         line(f"Option A — Fixed: ${option_a_fixed:,.2f}", dy=0.18)
         line(f"Option B — Success Fee ({success_fee_pct:.0f}% of savings): ${option_b_amt:,.2f}", dy=0.18)
         line(f"Option C — Hybrid: ${hybrid_fixed:,.2f} + {hybrid_pct:.0f}% of savings = ${option_c_amt:,.2f}", dy=0.22)
 
-        # Footer small print
         line("Planning-only estimates; not tax advice. Savings modeled at ordinary rates; state rate is an effective planning rate.", size=8, dy=0.18)
 
-        c.showPage()
-        c.save(); pdf_bytes.seek(0)
+        c.showPage(); c.save(); pdf_bytes.seek(0)
         st.download_button("Download Client PDF (Simple Summary)", data=pdf_bytes,
                            file_name=f"Amatore_Tax_Summary_Simple_{year}.pdf", mime="application/pdf")
     except Exception as e:
         st.warning(f"PDF generation unavailable: {e}")
 
-# Render multi-year tabs
+# Tabs
 tabs = st.tabs(["2023", "2024", "2025"])
 with tabs[0]:
     render_year_page(2023, key_prefix="y23_")
@@ -670,13 +630,3 @@ with tabs[1]:
 with tabs[2]:
     render_year_page(2025, key_prefix="y25_")
 
-st.markdown("---")
-with st.expander("Future Enhancements (v7.8)"):
-    st.markdown(
-        """
-        - Preferential LTCG/qualified-dividends module per year.
-        - QBI (§199A) interactions; owner-comp optimization.
-        - Cost seg & bonus depreciation modeling.
-        - Quarter-by-quarter estimates & safe harbor checks.
-        """
-    )
