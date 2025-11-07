@@ -1,11 +1,12 @@
-# Amatore & Co — Tax Planning Calculator v7.6.3 (Multi‑Year Tabs)
+# Amatore & Co — Tax Planning Calculator v7.6.4 (Multi‑Year + PDF)
 # Single-file Streamlit app
 # ------------------------------------------------------------
-# New in v7.6.3
-# - Year-specific pages (tabs) for 2023, 2024, 2025
-# - Proper year-aware standard deduction and bracket tables
-# - 2023 fully populated; 2024 populated; **2025 updated with IRS-published values** (you can revise as new guidance lands)
-# - Everything else (strategies, exports) works per selected year
+# New in v7.6.4
+# - Fix for std deduction type errors (robust casting)
+# - Client metadata (name, file #, preparer, notes)
+# - Expanded income breakdown (personal + business categories)
+# - Client-ready PDF summary export (ReportLab; guarded if lib unavailable)
+# - Year tabs: 2023, 2024, 2025 (2025 values loaded; can revise as guidance evolves)
 # ------------------------------------------------------------
 
 from __future__ import annotations
@@ -26,17 +27,17 @@ class TaxInputs:
     filing_status: str = "MFJ"  # MFJ, Single, MFS, HOH
     tax_year: int = 2024        # Will be locked by tab
 
-    # Income
+    # Income (ordinary bucket for now)
     wages_w2: float = 0.0
     business_income: float = 0.0  # Sch C / pass-through ordinary income
-    other_income: float = 0.0
+    other_income: float = 0.0     # other ordinary income (interest, ordinary div, ST gains, etc.)
 
     # Adjustments & Deductions
     adjustments: float = 0.0      # above-the-line
     itemized_deductions: float = 0.0
     use_standard_deduction: bool = True
 
-    # State/Local - keep simple as flat effective
+    # State/Local - simple flat effective
     state_effective_rate_pct: float = 0.0
 
     # Retirement deferrals (employee side) — optional baseline inputs (pre-strategy)
@@ -44,7 +45,7 @@ class TaxInputs:
     traditional_ira_contribution: float = 0.0
 
     # Business context for certain strategies
-    reasonable_comp_w2_owner: float = 0.0  # used for payroll-splitting scenarios
+    reasonable_comp_w2_owner: float = 0.0
 
 
 @dataclass
@@ -71,103 +72,39 @@ class StrategyResult:
 # =============================
 # Reference Data (Brackets & Standard Deduction)
 # =============================
-# 2023 & 2024 populated; 2025 UPDATED per IRS Rev. Proc. 2024-40.
+# 2023 & 2024 populated; 2025 values loaded.
 
 FEDERAL_STD_DEDUCTION = {
-    2023: {
-        "Single": 13850.0,
-        "MFJ": 27700.0,
-        "MFS": 13850.0,
-        "HOH": 20800.0,
-    },
-    2024: {
-        "Single": 14600.0,
-        "MFJ": 29200.0,
-        "MFS": 14600.0,
-        "HOH": 21900.0,
-    },
-    2025: {
-        "Single": 15000.0,
-        "MFJ": 30000.0,
-        "MFS": 15000.0,
-        "HOH": 22500.0,
-    },
+    2023: {"Single": 13850.0, "MFJ": 27700.0, "MFS": 13850.0, "HOH": 20800.0},
+    2024: {"Single": 14600.0, "MFJ": 29200.0, "MFS": 14600.0, "HOH": 21900.0},
+    2025: {"Single": 15000.0, "MFJ": 30000.0, "MFS": 15000.0, "HOH": 22500.0},
 }
 
-# Progressive tax brackets per year & status as list of (ceiling, rate)
 FEDERAL_BRACKETS = {
     2023: {
-        "Single": [
-            (11000, 0.10), (44725, 0.12), (95375, 0.22), (182100, 0.24),
-            (231250, 0.32), (578125, 0.35), (float("inf"), 0.37)
-        ],
-        "MFJ": [
-            (22000, 0.10), (89450, 0.12), (190750, 0.22), (364200, 0.24),
-            (462500, 0.32), (693750, 0.35), (float("inf"), 0.37)
-        ],
-        "MFS": [
-            (11000, 0.10), (44725, 0.12), (95375, 0.22), (182100, 0.24),
-            (231250, 0.32), (346875, 0.35), (float("inf"), 0.37)
-        ],
-        "HOH": [
-            (15700, 0.10), (59850, 0.12), (95350, 0.22), (182100, 0.24),
-            (231250, 0.32), (578100, 0.35), (float("inf"), 0.37)
-        ],
+        "Single": [(11000,0.10),(44725,0.12),(95375,0.22),(182100,0.24),(231250,0.32),(578125,0.35),(float("inf"),0.37)],
+        "MFJ":    [(22000,0.10),(89450,0.12),(190750,0.22),(364200,0.24),(462500,0.32),(693750,0.35),(float("inf"),0.37)],
+        "MFS":    [(11000,0.10),(44725,0.12),(95375,0.22),(182100,0.24),(231250,0.32),(346875,0.35),(float("inf"),0.37)],
+        "HOH":    [(15700,0.10),(59850,0.12),(95350,0.22),(182100,0.24),(231250,0.32),(578100,0.35),(float("inf"),0.37)],
     },
     2024: {
-        "Single": [
-            (11600, 0.10), (47150, 0.12), (100525, 0.22), (191950, 0.24),
-            (243725, 0.32), (609350, 0.35), (float("inf"), 0.37)
-        ],
-        "MFJ": [
-            (23200, 0.10), (94300, 0.12), (201050, 0.22), (383900, 0.24),
-            (487450, 0.32), (731200, 0.35), (float("inf"), 0.37)
-        ],
-        "MFS": [
-            (11600, 0.10), (47150, 0.12), (100525, 0.22), (191950, 0.24),
-            (243725, 0.32), (365600, 0.35), (float("inf"), 0.37)
-        ],
-        "HOH": [
-            (16550, 0.10), (63100, 0.12), (100500, 0.22), (191950, 0.24),
-            (243700, 0.32), (609350, 0.35), (float("inf"), 0.37)
-        ],
+        "Single": [(11600,0.10),(47150,0.12),(100525,0.22),(191950,0.24),(243725,0.32),(609350,0.35),(float("inf"),0.37)],
+        "MFJ":    [(23200,0.10),(94300,0.12),(201050,0.22),(383900,0.24),(487450,0.32),(731200,0.35),(float("inf"),0.37)],
+        "MFS":    [(11600,0.10),(47150,0.12),(100525,0.22),(191950,0.24),(243725,0.32),(365600,0.35),(float("inf"),0.37)],
+        "HOH":    [(16550,0.10),(63100,0.12),(100500,0.22),(191950,0.24),(243700,0.32),(609350,0.35),(float("inf"),0.37)],
     },
     2025: {
-        "Single": [
-            (11925, 0.10), (48475, 0.12), (103350, 0.22), (197300, 0.24),
-            (250525, 0.32), (626350, 0.35), (float("inf"), 0.37)
-        ],
-        "MFJ": [
-            (23850, 0.10), (96950, 0.12), (206700, 0.22), (394600, 0.24),
-            (501050, 0.32), (751600, 0.35), (float("inf"), 0.37)
-        ],
-        "MFS": [
-            (11925, 0.10), (48475, 0.12), (103350, 0.22), (197300, 0.24),
-            (250525, 0.32), (375800, 0.35), (float("inf"), 0.37)
-        ],
-        "HOH": [
-            (17000, 0.10), (64850, 0.12), (103350, 0.22), (197300, 0.24),
-            (250500, 0.32), (626350, 0.35), (float("inf"), 0.37)
-        ],
+        "Single": [(11925,0.10),(48475,0.12),(103350,0.22),(197300,0.24),(250525,0.32),(626350,0.35),(float("inf"),0.37)],
+        "MFJ":    [(23850,0.10),(96950,0.12),(206700,0.22),(394600,0.24),(501050,0.32),(751600,0.35),(float("inf"),0.37)],
+        "MFS":    [(11925,0.10),(48475,0.12),(103350,0.22),(197300,0.24),(250525,0.32),(375800,0.35),(float("inf"),0.37)],
+        "HOH":    [(17000,0.10),(64850,0.12),(103350,0.22),(197300,0.24),(250500,0.32),(626350,0.35),(float("inf"),0.37)],
     },
 }
-
-
-def _coerce_number(x: Union[int, float, str]) -> float:
-    """Coerce common scalar types to float; return 0.0 on failure."""
-    try:
-        if isinstance(x, (int, float)):
-            return float(x)
-        if isinstance(x, str):
-            return float(x.replace(",", "").strip())
-    except Exception:
-        pass
-    return 0.0
 
 
 def get_std_deduction(tax_year: int, filing_status: str, use_standard: bool, itemized: float) -> float:
     """Return numeric standard deduction for given year/status with robust coercion.
-    Never returns dict/list; falls back to 0.0 if table is malformed.
+    Always returns a float; never a dict/list.
     """
     try:
         tax_year = int(tax_year)
@@ -175,33 +112,26 @@ def get_std_deduction(tax_year: int, filing_status: str, use_standard: bool, ite
         tax_year = 2024
 
     if not use_standard:
-        return _coerce_number(max(0.0, itemized))
+        try:
+            return float(max(0.0, itemized))
+        except Exception:
+            return 0.0
 
     sd_map = FEDERAL_STD_DEDUCTION.get(tax_year, FEDERAL_STD_DEDUCTION[2024])
-
-    # If entire-year map is not a dict, coerce directly
     if not isinstance(sd_map, dict):
-        return _coerce_number(sd_map)
+        try:
+            return float(sd_map)
+        except Exception:
+            return 0.0
 
     val = sd_map.get(filing_status, sd_map.get("MFJ", 0.0))
-
-    # Guard against accidental list/tuple/dict values
-    if isinstance(val, (list, tuple)) and val:
-        val = val[0]
+    if isinstance(val, (list, tuple)):
+        val = val[0] if val else 0.0
     elif isinstance(val, dict):
         val = val.get("value", 0.0)
 
-    return _coerce_number(val)
-
-    except Exception:
-        tax_year = 2024
-    if not use_standard:
-        return float(max(0.0, itemized))
-    sd_map = FEDERAL_STD_DEDUCTION.get(tax_year, FEDERAL_STD_DEDUCTION[2024])
-    if isinstance(sd_map, dict):
-        return float(sd_map.get(filing_status, sd_map.get("MFJ", 0.0)))
     try:
-        return float(sd_map)
+        return float(val)
     except Exception:
         return 0.0
 
@@ -236,188 +166,116 @@ def compute_federal_tax(filing_status: str, taxable_income: float, tax_year: int
 
 
 def compute_baseline(inputs: TaxInputs) -> BaselineResult:
-    # Gross income
     gross = float(inputs.wages_w2) + float(inputs.business_income) + float(inputs.other_income)
-
-    # Above-the-line adjustments (reduces AGI)
     agi = max(0.0, gross - float(inputs.adjustments))
 
-    # Standard vs Itemized
     std_or_itemized = get_std_deduction(
         inputs.tax_year, inputs.filing_status, inputs.use_standard_deduction, inputs.itemized_deductions
     )
 
-    # Pre-strategy retirement contributions (if provided) — treat as above-the-line for simplicity
     predeferrals = float(inputs.employee_401k_deferral) + float(inputs.traditional_ira_contribution)
 
     taxable_income = max(0.0, agi - std_or_itemized - predeferrals)
 
     fed_tax, marginal_rate = compute_federal_tax(inputs.filing_status, taxable_income, inputs.tax_year)
-
     state_tax = round(taxable_income * (inputs.state_effective_rate_pct / 100.0), 2)
-
     total_tax = round(fed_tax + state_tax, 2)
 
-    return BaselineResult(
-        agi=round(agi, 2),
-        taxable_income=round(taxable_income, 2),
-        federal_tax=fed_tax,
-        state_tax=state_tax,
-        total_tax=total_tax,
-        marginal_rate=marginal_rate,
-    )
+    return BaselineResult(agi=round(agi,2), taxable_income=round(taxable_income,2), federal_tax=fed_tax,
+                          state_tax=state_tax, total_tax=total_tax, marginal_rate=marginal_rate)
 
 
 # =============================
-# Strategy Engines (unchanged)
+# Strategy Engines
 # =============================
 
 def _state_savings(delta_taxable: float, state_effective_rate_pct: float) -> float:
     return round(max(0.0, delta_taxable) * (state_effective_rate_pct / 100.0), 2)
 
 
-def strat_augusta_rule(
-    baseline: BaselineResult,
-    inputs: TaxInputs,
-    fair_daily_rate: float,
-    days: int,
-    description_override: Optional[str] = None,
-) -> StrategyResult:
+def strat_augusta_rule(baseline: BaselineResult, inputs: TaxInputs, fair_daily_rate: float, days: int,
+                       description_override: Optional[str] = None) -> StrategyResult:
     days = max(0, min(14, int(days)))
     rent = max(0.0, float(fair_daily_rate) * days)
-
     fed_save = round(rent * baseline.marginal_rate, 2)
     st_save = _state_savings(rent, inputs.state_effective_rate_pct)
-
-    desc = description_override or (
-        "Rent home to business up to 14 days at FMV; owner excludes income; business deducts expense."
-    )
-
-    return StrategyResult(
-        name="Augusta Rule",
-        description=desc,
-        change_in_taxable_income=-rent,
-        federal_tax_savings=fed_save,
-        state_tax_savings=st_save,
-        total_savings=round(fed_save + st_save, 2),
-        notes=f"Modeled at FMV ${fair_daily_rate:,.0f} x {days} days = ${rent:,.2f}.",
-    )
+    desc = description_override or ("Rent home to business up to 14 days at FMV; owner excludes income; business deducts expense.")
+    return StrategyResult(name="Augusta Rule", description=desc, change_in_taxable_income=-rent,
+                          federal_tax_savings=fed_save, state_tax_savings=st_save,
+                          total_savings=round(fed_save+st_save,2),
+                          notes=f"Modeled at FMV ${fair_daily_rate:,.0f} x {days} days = ${rent:,.2f}.")
 
 
-def strat_section_179(
-    baseline: BaselineResult,
-    inputs: TaxInputs,
-    equipment_cost: float,
-    elected_179: float,
-    description_override: Optional[str] = None,
-) -> StrategyResult:
+def strat_section_179(baseline: BaselineResult, inputs: TaxInputs, equipment_cost: float, elected_179: float,
+                      description_override: Optional[str] = None) -> StrategyResult:
     equipment_cost = max(0.0, float(equipment_cost))
     elected = max(0.0, min(float(elected_179), equipment_cost))
-
     fed_save = round(elected * baseline.marginal_rate, 2)
     st_save = _state_savings(elected, inputs.state_effective_rate_pct)
-
-    desc = description_override or (
-        "Elect to expense qualified equipment under IRC §179 (subject to limits/phaseouts)."
-    )
-
-    return StrategyResult(
-        name="Section 179 (Accelerated Expensing)",
-        description=desc,
-        change_in_taxable_income=-elected,
-        federal_tax_savings=fed_save,
-        state_tax_savings=st_save,
-        total_savings=round(fed_save + st_save, 2),
-        notes=f"Elected ${elected:,.2f} on equipment cost ${equipment_cost:,.2f}.",
-    )
+    desc = description_override or ("Elect to expense qualified equipment under IRC §179 (subject to limits/phaseouts).")
+    return StrategyResult(name="Section 179 (Accelerated Expensing)", description=desc, change_in_taxable_income=-elected,
+                          federal_tax_savings=fed_save, state_tax_savings=st_save,
+                          total_savings=round(fed_save+st_save,2),
+                          notes=f"Elected ${elected:,.2f} on equipment cost ${equipment_cost:,.2f}.")
 
 
-def strat_captive_831b(
-    baseline: BaselineResult,
-    inputs: TaxInputs,
-    annual_premium: float,
-    cap_limit: float = 2900000.0,
-    description_override: Optional[str] = None,
-) -> StrategyResult:
+def strat_captive_831b(baseline: BaselineResult, inputs: TaxInputs, annual_premium: float, cap_limit: float = 2900000.0,
+                       description_override: Optional[str] = None) -> StrategyResult:
     premium = max(0.0, float(annual_premium))
     deductible = min(premium, max(0.0, float(cap_limit)))
-
     fed_save = round(deductible * baseline.marginal_rate, 2)
     st_save = _state_savings(deductible, inputs.state_effective_rate_pct)
-
-    desc = description_override or (
-        "Elect under §831(b) for qualifying micro-captive; treat premiums as deductible (planning estimate)."
-    )
-
-    return StrategyResult(
-        name="Captive Insurance (§831(b))",
-        description=desc,
-        change_in_taxable_income=-deductible,
-        federal_tax_savings=fed_save,
-        state_tax_savings=st_save,
-        total_savings=round(fed_save + st_save, 2),
-        notes=f"Modeled deductible premium ${deductible:,.2f} (cap ${cap_limit:,.0f}).",
-    )
+    desc = description_override or ("Elect under §831(b) for qualifying micro-captive; treat premiums as deductible (planning estimate).")
+    return StrategyResult(name="Captive Insurance (§831(b))", description=desc, change_in_taxable_income=-deductible,
+                          federal_tax_savings=fed_save, state_tax_savings=st_save,
+                          total_savings=round(fed_save+st_save,2),
+                          notes=f"Modeled deductible premium ${deductible:,.2f} (cap ${cap_limit:,.0f}).")
 
 
-def strat_employee_deferral(
-    baseline: BaselineResult,
-    inputs: TaxInputs,
-    plan_type: str,
-    contribution: float,
-    description_override: Optional[str] = None,
-) -> StrategyResult:
+def strat_employee_deferral(baseline: BaselineResult, inputs: TaxInputs, plan_type: str, contribution: float,
+                            description_override: Optional[str] = None) -> StrategyResult:
     contrib = max(0.0, float(contribution))
     fed_save = round(contrib * baseline.marginal_rate, 2)
     st_save = _state_savings(contrib, inputs.state_effective_rate_pct)
-
     desc = description_override or (f"Pre-tax {plan_type} employee deferral (traditional)")
-
-    return StrategyResult(
-        name=f"{plan_type} Deferral",
-        description=desc,
-        change_in_taxable_income=-contrib,
-        federal_tax_savings=fed_save,
-        state_tax_savings=st_save,
-        total_savings=round(fed_save + st_save, 2),
-        notes=f"Modeled contribution ${contrib:,.2f}.",
-    )
+    return StrategyResult(name=f"{plan_type} Deferral", description=desc, change_in_taxable_income=-contrib,
+                          federal_tax_savings=fed_save, state_tax_savings=st_save, total_savings=round(fed_save+st_save,2),
+                          notes=f"Modeled contribution ${contrib:,.2f}.")
 
 
 # =============================
 # Streamlit UI (Multi‑Year Tabs)
 # =============================
 
-st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.6.3", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.6.4", page_icon="📊", layout="wide")
 
-st.title("Amatore & Co — Tax Planning Calculator v7.6.3")
+st.title("Amatore & Co — Tax Planning Calculator v7.6.4")
 st.caption("Planning-only estimates. For educational use; not tax advice.")
 
 with st.expander("About this version"):
     st.markdown(
         """
-        **What's new (v7.6.3)**
-        - Year-specific tabs for **2023**, **2024**, and **2025**.
-        - 2023 & 2024 tables populated. **2025 values loaded** (updateable).
-        - All strategies and exports operate within the selected year tab.
+        **What's new (v7.6.4)**
+        - Client fields, expanded income inputs, and PDF export.
+        - 2023/2024 tables + 2025 values loaded (updateable).
+        - Robust type safety around standard deductions and year keys.
         """
     )
 
 
 def render_year_page(year: int, key_prefix: str = ""):
-    """Renders one full calculator page for a given tax year.
-    key_prefix is used to make Streamlit widget keys unique per tab.
-    """
+    """Render one full calculator page for a given tax year."""
     st.subheader(f"Baseline Inputs — {year}")
 
     st.sidebar.header(f"Client Inputs — {year}")
 
-    filing_status = st.sidebar.selectbox(
-        "Filing Status",
-        ["MFJ", "Single", "MFS", "HOH"],
-        index=0,
-        key=f"{key_prefix}fs",
-    )
+    # Client metadata
+    client_name = st.sidebar.text_input("Client Name", value="", key=f"{key_prefix}client_name")
+    client_id = st.sidebar.text_input("Client ID / File #", value="", key=f"{key_prefix}client_id")
+    preparer = st.sidebar.text_input("Preparer", value="", key=f"{key_prefix}preparer")
+    notes_meta = st.sidebar.text_area("Engagement Notes (short)", value="", key=f"{key_prefix}eng_notes")
+
+    filing_status = st.sidebar.selectbox("Filing Status", ["MFJ", "Single", "MFS", "HOH"], index=0, key=f"{key_prefix}fs")
 
     col_fs1, col_fs2 = st.sidebar.columns(2)
     with col_fs1:
@@ -425,10 +283,23 @@ def render_year_page(year: int, key_prefix: str = ""):
     with col_fs2:
         state_rate = st.number_input("State Effective %", min_value=0.0, max_value=15.0, value=0.0, step=0.1, format="%.1f", key=f"{key_prefix}state")
 
-    st.sidebar.subheader("Income")
+    st.sidebar.subheader("Income — Personal & Business")
+    # Personal
     wages = st.sidebar.number_input("W-2 Wages", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}w2")
-    biz_inc = st.sidebar.number_input("Business Income (ordinary)", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}biz")
-    other_inc = st.sidebar.number_input("Other Income", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}other")
+    interest_inc = st.sidebar.number_input("Interest Income (1099-INT)", min_value=0.0, value=0.0, step=250.0, key=f"{key_prefix}int")
+    div_ordinary = st.sidebar.number_input("Dividends (Ordinary)", min_value=0.0, value=0.0, step=250.0, key=f"{key_prefix}divo")
+    div_qualified = st.sidebar.number_input("Dividends (Qualified)", min_value=0.0, value=0.0, step=250.0, key=f"{key_prefix}divq")
+    stcg = st.sidebar.number_input("Capital Gains (Short-Term)", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}stcg")
+    ltcg = st.sidebar.number_input("Capital Gains (Long-Term)", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}ltcg")
+
+    # Business / Pass-through
+    se_income = st.sidebar.number_input("Schedule C (Self-Employment) Net", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}schc")
+    k1_ordinary = st.sidebar.number_input("K-1 Ordinary Business Income", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}k1")
+    rental_net = st.sidebar.number_input("Rental Real Estate Net (Sch E)", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}rent")
+
+    # Aggregate for current engine (ordinary brackets only for now; LTCG/Qualified div noted for future module)
+    biz_inc = se_income + k1_ordinary + rental_net
+    other_inc = interest_inc + div_ordinary + stcg + div_qualified + ltcg
 
     st.sidebar.subheader("Adjustments & Deductions")
     adj = st.sidebar.number_input("Above-the-line Adjustments", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}adj")
@@ -468,6 +339,7 @@ def render_year_page(year: int, key_prefix: str = ""):
     st.divider()
 
     st.subheader(f"Strategies — {year}")
+    st.caption("Note: Current engine treats all income at ordinary rates. Preferential LTCG/Qualified Div module coming next.")
 
     strategy_results: List[StrategyResult] = []
 
@@ -480,7 +352,6 @@ def render_year_page(year: int, key_prefix: str = ""):
             aug_days = st.number_input("Days (max 14)", min_value=0, max_value=14, value=0, step=1, key=f"{key_prefix}aug_days")
         with c3:
             st.caption("Rent personal residence to your business up to 14 days/year. Income excluded; business deducts.")
-
         if (aug_rate > 0) and (aug_days > 0):
             strategy_results.append(strat_augusta_rule(base, inputs, aug_rate, int(aug_days)))
 
@@ -492,7 +363,6 @@ def render_year_page(year: int, key_prefix: str = ""):
         with s2:
             elect_179 = st.number_input("Elect §179 Amount", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}179_elect")
         st.caption("Simplified model — ignores phaseouts/limitations. Update for full compliance as needed.")
-
         if elect_179 > 0:
             strategy_results.append(strat_section_179(base, inputs, eq_cost, elect_179))
 
@@ -504,7 +374,6 @@ def render_year_page(year: int, key_prefix: str = ""):
         with c2:
             cap = st.number_input("§831(b) Annual Limit", min_value=500000.0, max_value=5000000.0, value=2900000.0, step=50000.0, key=f"{key_prefix}cap_limit")
         st.caption("Planning-only estimate. Eligibility/risk rules not evaluated here.")
-
         if premium > 0:
             strategy_results.append(strat_captive_831b(base, inputs, premium, cap))
 
@@ -518,7 +387,6 @@ def render_year_page(year: int, key_prefix: str = ""):
     # Reporting
     if strategy_results:
         st.subheader("Strategy Savings Summary")
-
         total_fed = sum(s.federal_tax_savings for s in strategy_results)
         total_state = sum(s.state_tax_savings for s in strategy_results)
         total_all = sum(s.total_savings for s in strategy_results)
@@ -546,36 +414,94 @@ def render_year_page(year: int, key_prefix: str = ""):
         st.markdown("### Export")
         import pandas as pd
         df = pd.DataFrame([
-            {
-                "Strategy": s.name,
-                "Description": s.description,
-                "Delta Taxable": s.change_in_taxable_income,
-                "Federal Savings": s.federal_tax_savings,
-                "State Savings": s.state_tax_savings,
-                "Total Savings": s.total_savings,
-                "Notes": s.notes or "",
-            }
+            {"Strategy": s.name, "Description": s.description, "Delta Taxable": s.change_in_taxable_income,
+             "Federal Savings": s.federal_tax_savings, "State Savings": s.state_tax_savings,
+             "Total Savings": s.total_savings, "Notes": s.notes or ""}
             for s in strategy_results
         ])
 
-        csv_buf = io.StringIO()
-        df.to_csv(csv_buf, index=False)
+        csv_buf = io.StringIO(); df.to_csv(csv_buf, index=False)
         st.download_button("Download CSV", csv_buf.getvalue(), file_name=f"strategy_savings_{year}.csv", mime="text/csv")
 
         snapshot = {
-            "version": "v7.6.3",
+            "version": "v7.6.4",
             "year": year,
+            "client": {"name": client_name, "id": client_id, "preparer": preparer, "notes": notes_meta},
+            "income_breakdown": {
+                "w2": wages,
+                "interest": interest_inc,
+                "dividends_ordinary": div_ordinary,
+                "dividends_qualified": div_qualified,
+                "short_term_gains": stcg,
+                "long_term_gains": ltcg,
+                "schedule_c": se_income,
+                "k1_ordinary": k1_ordinary,
+                "rental_net": rental_net,
+            },
             "inputs": asdict(inputs),
             "baseline": asdict(base),
             "strategies": [asdict(s) for s in strategy_results],
             "totals": {"federal": total_fed, "state": total_state, "all": total_all},
         }
-        st.download_button(
-            "Download JSON Snapshot",
-            data=json.dumps(snapshot, indent=2),
-            file_name=f"amatore_tax_planner_{year}_snapshot.json",
-            mime="application/json",
-        )
+        st.download_button("Download JSON Snapshot", data=json.dumps(snapshot, indent=2),
+                           file_name=f"amatore_tax_planner_{year}_snapshot.json", mime="application/json")
+
+        # PDF summary (guarded if ReportLab is not installed)
+        try:
+            from reportlab.lib.pagesizes import letter
+            from reportlab.pdfgen import canvas as rl_canvas
+            from reportlab.lib.units import inch
+            pdf_bytes = io.BytesIO()
+            c = rl_canvas.Canvas(pdf_bytes, pagesize=letter)
+            width, height = letter
+            y = height - 1*inch
+
+            c.setFont('Helvetica-Bold', 14)
+            c.drawString(1*inch, y, f"Amatore & Co — Tax Planning Summary ({year})")
+            y -= 0.3*inch
+
+            c.setFont('Helvetica', 10)
+            c.drawString(1*inch, y, f"Client: {client_name or '—'}    File#: {client_id or '—'}    Preparer: {preparer or '—'}")
+            y -= 0.25*inch
+            if notes_meta:
+                c.drawString(1*inch, y, f"Notes: {notes_meta[:80]}")
+                y -= 0.2*inch
+
+            c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Baseline"); y -= 0.22*inch
+            c.setFont('Helvetica', 10)
+            c.drawString(1*inch, y, f"AGI: ${base.agi:,.2f}   Taxable: ${base.taxable_income:,.2f}   Fed: ${base.federal_tax:,.2f}   State: ${base.state_tax:,.2f}   Total: ${base.total_tax:,.2f}")
+            y -= 0.3*inch
+
+            c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Income Breakdown"); y -= 0.22*inch
+            c.setFont('Helvetica', 10)
+            ib = snapshot["income_breakdown"]
+            for k, label in [("w2","W-2 Wages"),("interest","Interest"),("dividends_ordinary","Dividends (Ord)"),
+                             ("dividends_qualified","Dividends (Qual)"),("short_term_gains","Cap Gains (ST)"),
+                             ("long_term_gains","Cap Gains (LT)"),("schedule_c","Schedule C"),
+                             ("k1_ordinary","K-1 Ordinary"),("rental_net","Rental Net")]:
+                c.drawString(1*inch, y, f"{label}: ${ib.get(k,0.0):,.2f}")
+                y -= 0.18*inch
+                if y < 1.2*inch:
+                    c.showPage(); y = height - 1*inch
+
+            c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Strategies"); y -= 0.22*inch
+            c.setFont('Helvetica', 10)
+            for s in strategy_results:
+                c.drawString(1*inch, y, f"• {s.name} — Savings: ${s.total_savings:,.2f}")
+                y -= 0.18*inch
+                if s.notes:
+                    c.drawString(1.2*inch, y, f"{(s.notes or '')[:90]}")
+                    y -= 0.18*inch
+                if y < 1.2*inch:
+                    c.showPage(); y = height - 1*inch
+
+            c.setFont('Helvetica-Bold', 12)
+            c.drawString(1*inch, y, f"Total Savings: ${total_all:,.2f} (Fed ${total_fed:,.2f} | State ${total_state:,.2f})")
+            c.showPage(); c.save(); pdf_bytes.seek(0)
+            st.download_button("Download Client PDF Summary", data=pdf_bytes,
+                               file_name=f"Amatore_Tax_Summary_{year}.pdf", mime="application/pdf")
+        except Exception as e:
+            st.warning(f"PDF generation unavailable: {e}")
     else:
         st.info("Add values to any strategy expander above to see savings and export options.")
 
@@ -595,11 +521,11 @@ st.markdown("---")
 with st.expander("Implementation Notes & To‑Do for v7.7"):
     st.markdown(
         """
-        - **Update IRS 2025 brackets/standard deduction** once finalized.
-        - Add owner-comp optimization and payroll split modeling.
-        - Add QBI (§199A) interaction model (phase-outs, W-2/UBIA tests).
-        - Add cost segregation & bonus depreciation module with class-life splits.
-        - Add login/client save + paywall (integrate with lightweight backend/auth).
+        - Add preferential LTCG/qualified-dividends rate module per year.
+        - Owner-comp optimization and payroll split modeling.
+        - QBI (§199A) interaction model (phase-outs, W-2/UBIA tests).
+        - Cost segregation & bonus depreciation with class-life splits.
+        - Login/client save + paywall (lightweight backend/auth).
         """
     )
 
