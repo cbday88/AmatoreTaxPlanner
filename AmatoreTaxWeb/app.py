@@ -1,10 +1,10 @@
-# Amatore & Co — Tax Planning Calculator v7.6.2 (Multi‑Year Tabs)
+# Amatore & Co — Tax Planning Calculator v7.6.3 (Multi‑Year Tabs)
 # Single-file Streamlit app
 # ------------------------------------------------------------
-# New in v7.6.2
+# New in v7.6.3
 # - Year-specific pages (tabs) for 2023, 2024, 2025
 # - Proper year-aware standard deduction and bracket tables
-# - 2023 fully populated; 2024 populated; 2025 UPDATED with official IRS values (Rev. Proc. 2024-40)
+# - 2023 fully populated; 2024 populated; **2025 updated with IRS-published values** (you can revise as new guidance lands)
 # - Everything else (strategies, exports) works per selected year
 # ------------------------------------------------------------
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import io
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import streamlit as st
 
@@ -87,22 +87,10 @@ FEDERAL_STD_DEDUCTION = {
         "HOH": 21900.0,
     },
     2025: {
-        "Single": [
-            (11925, 0.10), (48475, 0.12), (103350, 0.22), (197300, 0.24),
-            (250525, 0.32), (626350, 0.35), (float("inf"), 0.37)
-        ],
-        "MFJ": [
-            (23850, 0.10), (96950, 0.12), (206700, 0.22), (394600, 0.24),
-            (501050, 0.32), (751600, 0.35), (float("inf"), 0.37)
-        ],
-        "MFS": [
-            (11925, 0.10), (48475, 0.12), (103350, 0.22), (197300, 0.24),
-            (250525, 0.32), (375800, 0.35), (float("inf"), 0.37)
-        ],
-        "HOH": [
-            (17000, 0.10), (64850, 0.12), (103350, 0.22), (197300, 0.24),
-            (250500, 0.32), (626350, 0.35), (float("inf"), 0.37)
-        ],
+        "Single": 15000.0,
+        "MFJ": 30000.0,
+        "MFS": 15000.0,
+        "HOH": 22500.0,
     },
 }
 
@@ -145,32 +133,66 @@ FEDERAL_BRACKETS = {
         ],
     },
     2025: {
-        # Placeholder: mirrors 2024 until IRS publishes final tables
         "Single": [
-            (11600, 0.10), (47150, 0.12), (100525, 0.22), (191950, 0.24),
-            (243725, 0.32), (609350, 0.35), (float("inf"), 0.37)
+            (11925, 0.10), (48475, 0.12), (103350, 0.22), (197300, 0.24),
+            (250525, 0.32), (626350, 0.35), (float("inf"), 0.37)
         ],
         "MFJ": [
-            (23200, 0.10), (94300, 0.12), (201050, 0.22), (383900, 0.24),
-            (487450, 0.32), (731200, 0.35), (float("inf"), 0.37)
+            (23850, 0.10), (96950, 0.12), (206700, 0.22), (394600, 0.24),
+            (501050, 0.32), (751600, 0.35), (float("inf"), 0.37)
         ],
         "MFS": [
-            (11600, 0.10), (47150, 0.12), (100525, 0.22), (191950, 0.24),
-            (243725, 0.32), (365600, 0.35), (float("inf"), 0.37)
+            (11925, 0.10), (48475, 0.12), (103350, 0.22), (197300, 0.24),
+            (250525, 0.32), (375800, 0.35), (float("inf"), 0.37)
         ],
         "HOH": [
-            (16550, 0.10), (63100, 0.12), (100500, 0.22), (191950, 0.24),
-            (243700, 0.32), (609350, 0.35), (float("inf"), 0.37)
+            (17000, 0.10), (64850, 0.12), (103350, 0.22), (197300, 0.24),
+            (250500, 0.32), (626350, 0.35), (float("inf"), 0.37)
         ],
     },
 }
 
 
+def _coerce_number(x: Union[int, float, str]) -> float:
+    """Coerce common scalar types to float; return 0.0 on failure."""
+    try:
+        if isinstance(x, (int, float)):
+            return float(x)
+        if isinstance(x, str):
+            return float(x.replace(",", "").strip())
+    except Exception:
+        pass
+    return 0.0
+
+
 def get_std_deduction(tax_year: int, filing_status: str, use_standard: bool, itemized: float) -> float:
-    """Return a numeric standard deduction for the given year/status.
-    Ensures `tax_year` is an int and always returns a float (never a dict)."""
+    """Return numeric standard deduction for given year/status with robust coercion.
+    Never returns dict/list; falls back to 0.0 if table is malformed.
+    """
     try:
         tax_year = int(tax_year)
+    except Exception:
+        tax_year = 2024
+
+    if not use_standard:
+        return _coerce_number(max(0.0, itemized))
+
+    sd_map = FEDERAL_STD_DEDUCTION.get(tax_year, FEDERAL_STD_DEDUCTION[2024])
+
+    # If entire-year map is not a dict, coerce directly
+    if not isinstance(sd_map, dict):
+        return _coerce_number(sd_map)
+
+    val = sd_map.get(filing_status, sd_map.get("MFJ", 0.0))
+
+    # Guard against accidental list/tuple/dict values
+    if isinstance(val, (list, tuple)) and val:
+        val = val[0]
+    elif isinstance(val, dict):
+        val = val.get("value", 0.0)
+
+    return _coerce_number(val)
+
     except Exception:
         tax_year = 2024
     if not use_standard:
@@ -366,17 +388,17 @@ def strat_employee_deferral(
 # Streamlit UI (Multi‑Year Tabs)
 # =============================
 
-st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.6.2", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.6.3", page_icon="📊", layout="wide")
 
-st.title("Amatore & Co — Tax Planning Calculator v7.6.2")
+st.title("Amatore & Co — Tax Planning Calculator v7.6.3")
 st.caption("Planning-only estimates. For educational use; not tax advice.")
 
 with st.expander("About this version"):
     st.markdown(
         """
-        **What's new (v7.6.2)**
+        **What's new (v7.6.3)**
         - Year-specific tabs for **2023**, **2024**, and **2025**.
-        - 2023 & 2024 tables populated. **2025 mirrors 2024** as a placeholder until the IRS publishes final values.
+        - 2023 & 2024 tables populated. **2025 values loaded** (updateable).
         - All strategies and exports operate within the selected year tab.
         """
     )
@@ -541,7 +563,7 @@ def render_year_page(year: int, key_prefix: str = ""):
         st.download_button("Download CSV", csv_buf.getvalue(), file_name=f"strategy_savings_{year}.csv", mime="text/csv")
 
         snapshot = {
-            "version": "v7.6.2",
+            "version": "v7.6.3",
             "year": year,
             "inputs": asdict(inputs),
             "baseline": asdict(base),
@@ -580,3 +602,4 @@ with st.expander("Implementation Notes & To‑Do for v7.7"):
         - Add login/client save + paywall (integrate with lightweight backend/auth).
         """
     )
+
