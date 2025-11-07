@@ -496,7 +496,22 @@ def render_year_page(year: int, key_prefix: str = ""):
                     c.showPage(); y = height - 1*inch
 
             c.setFont('Helvetica-Bold', 12)
-            c.drawString(1*inch, y, f"Total Savings: ${total_all:,.2f} (Fed ${total_fed:,.2f} | State ${total_state:,.2f})")
+            c.drawString(1*inch, y, f"Total Strategy Savings: ${total_all:,.2f}")
+            y -= 0.22*inch
+            # ROI block
+            c.setFont('Helvetica-Bold', 12)
+            c.drawString(1*inch, y, "Return on Investment (ROI)")
+            y -= 0.22*inch
+            c.setFont('Helvetica', 10)
+            c.drawString(1*inch, y, f"Planning Fee: ${planning_fee:,.2f}")
+            y -= 0.18*inch
+            c.drawString(1*inch, y, f"Invested Principal (Oil & Gas + Other): ${principal:,.2f}")
+            y -= 0.18*inch
+            c.drawString(1*inch, y, f"Projection: {proj_years} yrs @ {exp_return_pct:.1f}% → Projected Investment Gain: ${projected_investment_gain:,.2f}")
+            y -= 0.18*inch
+            c.drawString(1*inch, y, f"Total Costs: ${total_costs:,.2f}")
+            y -= 0.18*inch
+            c.drawString(1*inch, y, f"ROI %: {(roi_pct or 0.0):,.2f}%")
             c.showPage(); c.save(); pdf_bytes.seek(0)
             st.download_button("Download Client PDF Summary", data=pdf_bytes,
                                file_name=f"Amatore_Tax_Summary_{year}.pdf", mime="application/pdf")
@@ -528,4 +543,3 @@ with st.expander("Implementation Notes & To‑Do for v7.7"):
         - Login/client save + paywall (lightweight backend/auth).
         """
     )
-
