@@ -640,4 +640,3 @@ with st.expander("Implementation Notes & To-Do for v7.7"):
         - Login/client save + paywall (lightweight backend/auth).
         """
     )
-
