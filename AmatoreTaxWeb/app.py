@@ -1,12 +1,13 @@
-# Amatore & Co — Tax Planning Calculator v7.6.4 (Multi‑Year + PDF)
+# Amatore & Co — Tax Planning Calculator v7.6.5 (States + ROI + Always-on PDF)
 # Single-file Streamlit app
 # ------------------------------------------------------------
-# New in v7.6.4
-# - Fix for std deduction type errors (robust casting)
-# - Client metadata (name, file #, preparer, notes)
-# - Expanded income breakdown (personal + business categories)
-# - Client-ready PDF summary export (ReportLab; guarded if lib unavailable)
-# - Year tabs: 2023, 2024, 2025 (2025 values loaded; can revise as guidance evolves)
+# New in v7.6.5
+# - State dropdown restored (with manual Effective % entry)
+# - Engagement & ROI panel (Client Plan Fee, Oil & Gas, Other investment,
+#   expected annual return %, projection years)
+# - ROI displayed on-screen and included in PDF
+# - Export & PDF buttons are ALWAYS visible (even with zero strategies)
+# - Keeps robust 2025 standard deduction/lookup fixes from 7.6.4
 # ------------------------------------------------------------
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from __future__ import annotations
 import json
 import io
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 import streamlit as st
 
@@ -70,10 +71,14 @@ class StrategyResult:
 
 
 # =============================
-# Reference Data (Brackets & Standard Deduction)
+# Reference Data (States, Brackets & Standard Deduction)
 # =============================
-# 2023 & 2024 populated; 2025 values loaded.
 
+STATES = [
+    "AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"
+]
+
+# 2023 & 2024 populated; 2025 values loaded.
 FEDERAL_STD_DEDUCTION = {
     2023: {"Single": 13850.0, "MFJ": 27700.0, "MFS": 13850.0, "HOH": 20800.0},
     2024: {"Single": 14600.0, "MFJ": 29200.0, "MFS": 14600.0, "HOH": 21900.0},
@@ -247,18 +252,19 @@ def strat_employee_deferral(baseline: BaselineResult, inputs: TaxInputs, plan_ty
 # Streamlit UI (Multi‑Year Tabs)
 # =============================
 
-st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.6.4", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Amatore & Co — Tax Planning Calculator v7.6.5", page_icon="📊", layout="wide")
 
-st.title("Amatore & Co — Tax Planning Calculator v7.6.4")
+st.title("Amatore & Co — Tax Planning Calculator v7.6.5")
 st.caption("Planning-only estimates. For educational use; not tax advice.")
 
 with st.expander("About this version"):
     st.markdown(
         """
-        **What's new (v7.6.4)**
-        - Client fields, expanded income inputs, and PDF export.
-        - 2023/2024 tables + 2025 values loaded (updateable).
-        - Robust type safety around standard deductions and year keys.
+        **What's new (v7.6.5)**
+        - State dropdown + effective % field.
+        - Engagement & ROI panel (plan fee, investments, expected % and years).
+        - ROI shown on-screen and in PDF; exports visible even with 0 strategies.
+        - 2023/2024 tables + 2025 values loaded (updateable). Robust type safety.
         """
     )
 
@@ -281,7 +287,8 @@ def render_year_page(year: int, key_prefix: str = ""):
     with col_fs1:
         st.number_input("Tax Year", min_value=2023, max_value=2026, value=year, step=1, key=f"{key_prefix}ty", disabled=True)
     with col_fs2:
-        state_rate = st.number_input("State Effective %", min_value=0.0, max_value=15.0, value=0.0, step=0.1, format="%.1f", key=f"{key_prefix}state")
+        state_selected = st.selectbox("State", STATES, index=STATES.index("CA") if "CA" in STATES else 0, key=f"{key_prefix}state_sel")
+    state_rate = st.number_input("State Effective % (enter your effective rate)", min_value=0.0, max_value=15.0, value=0.0, step=0.1, format="%.1f", key=f"{key_prefix}state")
 
     st.sidebar.subheader("Income — Personal & Business")
     # Personal
@@ -311,6 +318,14 @@ def render_year_page(year: int, key_prefix: str = ""):
     st.sidebar.subheader("Pre-Strategy Retirement (optional)")
     pre_401k = st.sidebar.number_input("Employee 401(k) Deferral (traditional)", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}401k")
     pre_ira = st.sidebar.number_input("Traditional IRA Contribution", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}ira")
+
+    # Engagement & ROI
+    st.sidebar.subheader("Engagement & ROI")
+    planning_fee = st.sidebar.number_input("Client Plan Fee ($)", min_value=0.0, value=0.0, step=500.0, key=f"{key_prefix}fee")
+    oil_gas = st.sidebar.number_input("Oil & Gas Investment", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}oilgas")
+    other_invest = st.sidebar.number_input("Other Investment", min_value=0.0, value=0.0, step=1000.0, key=f"{key_prefix}otherinv")
+    exp_return_pct = st.sidebar.number_input("Expected Annual Return %", min_value=0.0, max_value=50.0, value=0.0, step=0.1, format="%.1f", key=f"{key_prefix}retpct")
+    proj_years = st.sidebar.number_input("Projection Years", min_value=1, max_value=50, value=1, step=1, key=f"{key_prefix}years")
 
     inputs = TaxInputs(
         filing_status=filing_status,
@@ -384,20 +399,37 @@ def render_year_page(year: int, key_prefix: str = ""):
         if addl_def > 0:
             strategy_results.append(strat_employee_deferral(base, inputs, plan, addl_def))
 
-    # Reporting
+    # ----------------- Reporting & ROI (ALWAYS visible) -----------------
+    st.subheader("Strategy Savings Summary")
+
+    total_fed = sum(s.federal_tax_savings for s in strategy_results)
+    total_state = sum(s.state_tax_savings for s in strategy_results)
+    total_all = sum(s.total_savings for s in strategy_results)
+
+    tcols = st.columns(3)
+    tcols[0].metric("Federal Savings", f"${total_fed:,.2f}")
+    tcols[1].metric("State Savings", f"${total_state:,.2f}")
+    tcols[2].metric("Total Savings", f"${total_all:,.2f}")
+
+    # ROI calculations (always show)
+    principal = oil_gas + other_invest
+    rate = exp_return_pct / 100.0
+    fv = principal * ((1 + rate) ** proj_years)
+    projected_investment_gain = max(0.0, fv - principal)
+    total_costs = planning_fee + principal
+    total_gain = total_all + projected_investment_gain
+    roi_pct = (total_gain / total_costs * 100.0) if total_costs > 0 else None
+
+    rcols = st.columns(4)
+    rcols[0].metric("Planning Fee", f"${planning_fee:,.2f}")
+    rcols[1].metric("Invested (principal)", f"${principal:,.2f}")
+    rcols[2].metric("Proj. Investment Gain", f"${projected_investment_gain:,.2f}")
+    rcols[3].metric("ROI %", f"{roi_pct:,.2f}%" if roi_pct is not None else "—")
+
+    st.markdown("---")
+
+    # Strategy cards (only if any)
     if strategy_results:
-        st.subheader("Strategy Savings Summary")
-        total_fed = sum(s.federal_tax_savings for s in strategy_results)
-        total_state = sum(s.state_tax_savings for s in strategy_results)
-        total_all = sum(s.total_savings for s in strategy_results)
-
-        tcols = st.columns(3)
-        tcols[0].metric("Federal Savings", f"${total_fed:,.2f}")
-        tcols[1].metric("State Savings", f"${total_state:,.2f}")
-        tcols[2].metric("Total Savings", f"${total_all:,.2f}")
-
-        st.markdown("---")
-
         for s in strategy_results:
             with st.container(border=True):
                 st.markdown(f"### {s.name}")
@@ -409,81 +441,88 @@ def render_year_page(year: int, key_prefix: str = ""):
                 c4.metric("Total Savings", f"${s.total_savings:,.2f}")
                 if s.notes:
                     st.caption(s.notes)
+    else:
+        st.info("No strategies added yet — ROI and exports are still available below.")
 
-        # Export
-        st.markdown("### Export")
-        import pandas as pd
-        df = pd.DataFrame([
-            {"Strategy": s.name, "Description": s.description, "Delta Taxable": s.change_in_taxable_income,
-             "Federal Savings": s.federal_tax_savings, "State Savings": s.state_tax_savings,
-             "Total Savings": s.total_savings, "Notes": s.notes or ""}
-            for s in strategy_results
-        ])
-
-        csv_buf = io.StringIO(); df.to_csv(csv_buf, index=False)
-        st.download_button("Download CSV", csv_buf.getvalue(), file_name=f"strategy_savings_{year}.csv", mime="text/csv")
-
-        snapshot = {
-            "version": "v7.6.4",
-            "year": year,
-            "client": {"name": client_name, "id": client_id, "preparer": preparer, "notes": notes_meta},
-            "income_breakdown": {
-                "w2": wages,
-                "interest": interest_inc,
-                "dividends_ordinary": div_ordinary,
-                "dividends_qualified": div_qualified,
-                "short_term_gains": stcg,
-                "long_term_gains": ltcg,
-                "schedule_c": se_income,
-                "k1_ordinary": k1_ordinary,
-                "rental_net": rental_net,
-            },
-            "inputs": asdict(inputs),
-            "baseline": asdict(base),
-            "strategies": [asdict(s) for s in strategy_results],
-            "totals": {"federal": total_fed, "state": total_state, "all": total_all},
+    # ----------------- Export (ALWAYS visible) -----------------
+    st.markdown("### Export")
+    import pandas as pd
+    df = pd.DataFrame([
+        {
+            "Strategy": s.name,
+            "Description": s.description,
+            "Delta Taxable": s.change_in_taxable_income,
+            "Federal Savings": s.federal_tax_savings,
+            "State Savings": s.state_tax_savings,
+            "Total Savings": s.total_savings,
+            "Notes": s.notes or "",
         }
-        st.download_button("Download JSON Snapshot", data=json.dumps(snapshot, indent=2),
-                           file_name=f"amatore_tax_planner_{year}_snapshot.json", mime="application/json")
+        for s in strategy_results
+    ])
 
-        # PDF summary (guarded if ReportLab is not installed)
-        try:
-            from reportlab.lib.pagesizes import letter
-            from reportlab.pdfgen import canvas as rl_canvas
-            from reportlab.lib.units import inch
-            pdf_bytes = io.BytesIO()
-            c = rl_canvas.Canvas(pdf_bytes, pagesize=letter)
-            width, height = letter
-            y = height - 1*inch
+    csv_buf = io.StringIO(); df.to_csv(csv_buf, index=False)
+    st.download_button("Download CSV", csv_buf.getvalue(), file_name=f"strategy_savings_{year}.csv", mime="text/csv")
 
-            c.setFont('Helvetica-Bold', 14)
-            c.drawString(1*inch, y, f"Amatore & Co — Tax Planning Summary ({year})")
-            y -= 0.3*inch
+    snapshot = {
+        "version": "v7.6.5",
+        "year": year,
+        "client": {"name": client_name, "id": client_id, "preparer": preparer, "notes": notes_meta, "state": state_selected},
+        "engagement": {"planning_fee": planning_fee, "oil_gas": oil_gas, "other_invest": other_invest, "expected_return_pct": exp_return_pct, "years": int(proj_years)},
+        "income_breakdown": {
+            "w2": wages,
+            "interest": interest_inc,
+            "dividends_ordinary": div_ordinary,
+            "dividends_qualified": div_qualified,
+            "short_term_gains": stcg,
+            "long_term_gains": ltcg,
+            "schedule_c": se_income,
+            "k1_ordinary": k1_ordinary,
+            "rental_net": rental_net,
+        },
+        "inputs": asdict(inputs),
+        "baseline": asdict(base),
+        "strategies": [asdict(s) for s in strategy_results],
+        "totals": {"federal": total_fed, "state": total_state, "all": total_all, "projected_investment_gain": projected_investment_gain, "roi_percent": roi_pct},
+    }
+    st.download_button("Download JSON Snapshot", data=json.dumps(snapshot, indent=2),
+                       file_name=f"amatore_tax_planner_{year}_snapshot.json", mime="application/json")
 
-            c.setFont('Helvetica', 10)
-            c.drawString(1*inch, y, f"Client: {client_name or '—'}    File#: {client_id or '—'}    Preparer: {preparer or '—'}")
-            y -= 0.25*inch
-            if notes_meta:
-                c.drawString(1*inch, y, f"Notes: {notes_meta[:80]}")
-                y -= 0.2*inch
+    # PDF summary (ALWAYS visible; guarded if ReportLab missing)
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib.units import inch
+        pdf_bytes = io.BytesIO()
+        c = rl_canvas.Canvas(pdf_bytes, pagesize=letter)
+        width, height = letter
+        y = height - 1*inch
 
-            c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Baseline"); y -= 0.22*inch
-            c.setFont('Helvetica', 10)
-            c.drawString(1*inch, y, f"AGI: ${base.agi:,.2f}   Taxable: ${base.taxable_income:,.2f}   Fed: ${base.federal_tax:,.2f}   State: ${base.state_tax:,.2f}   Total: ${base.total_tax:,.2f}")
-            y -= 0.3*inch
+        c.setFont('Helvetica-Bold', 14)
+        c.drawString(1*inch, y, f"Amatore & Co — Tax Planning Summary ({year})")
+        y -= 0.3*inch
 
-            c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Income Breakdown"); y -= 0.22*inch
-            c.setFont('Helvetica', 10)
-            ib = snapshot["income_breakdown"]
-            for k, label in [("w2","W-2 Wages"),("interest","Interest"),("dividends_ordinary","Dividends (Ord)"),
-                             ("dividends_qualified","Dividends (Qual)"),("short_term_gains","Cap Gains (ST)"),
-                             ("long_term_gains","Cap Gains (LT)"),("schedule_c","Schedule C"),
-                             ("k1_ordinary","K-1 Ordinary"),("rental_net","Rental Net")]:
-                c.drawString(1*inch, y, f"{label}: ${ib.get(k,0.0):,.2f}")
-                y -= 0.18*inch
-                if y < 1.2*inch:
-                    c.showPage(); y = height - 1*inch
+        c.setFont('Helvetica', 10)
+        c.drawString(1*inch, y, f"Client: {client_name or '—'}    File#: {client_id or '—'}    Preparer: {preparer or '—'}    State: {state_selected}")
+        y -= 0.25*inch
+        if notes_meta:
+            c.drawString(1*inch, y, f"Notes: {notes_meta[:80]}")
+            y -= 0.2*inch
 
+        c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Baseline"); y -= 0.22*inch
+        c.setFont('Helvetica', 10)
+        c.drawString(1*inch, y, f"AGI: ${base.agi:,.2f}   Taxable: ${base.taxable_income:,.2f}   Fed: ${base.federal_tax:,.2f}   State: ${base.state_tax:,.2f}   Total: ${base.total_tax:,.2f}")
+        y -= 0.3*inch
+
+        c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Income Breakdown"); y -= 0.22*inch
+        c.setFont('Helvetica', 10)
+        for label, val in [("W-2 Wages", wages),("Interest", interest_inc),("Dividends (Ord)", div_ordinary),("Dividends (Qual)", div_qualified),
+                           ("Cap Gains (ST)", stcg),("Cap Gains (LT)", ltcg),("Schedule C", se_income),("K-1 Ordinary", k1_ordinary),("Rental Net", rental_net)]:
+            c.drawString(1*inch, y, f"{label}: ${val:,.2f}")
+            y -= 0.18*inch
+            if y < 1.2*inch:
+                c.showPage(); y = height - 1*inch
+
+        if strategy_results:
             c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Strategies"); y -= 0.22*inch
             c.setFont('Helvetica', 10)
             for s in strategy_results:
@@ -495,30 +534,24 @@ def render_year_page(year: int, key_prefix: str = ""):
                 if y < 1.2*inch:
                     c.showPage(); y = height - 1*inch
 
-            c.setFont('Helvetica-Bold', 12)
-            c.drawString(1*inch, y, f"Total Strategy Savings: ${total_all:,.2f}")
-            y -= 0.22*inch
-            # ROI block
-            c.setFont('Helvetica-Bold', 12)
-            c.drawString(1*inch, y, "Return on Investment (ROI)")
-            y -= 0.22*inch
-            c.setFont('Helvetica', 10)
-            c.drawString(1*inch, y, f"Planning Fee: ${planning_fee:,.2f}")
-            y -= 0.18*inch
-            c.drawString(1*inch, y, f"Invested Principal (Oil & Gas + Other): ${principal:,.2f}")
-            y -= 0.18*inch
-            c.drawString(1*inch, y, f"Projection: {proj_years} yrs @ {exp_return_pct:.1f}% → Projected Investment Gain: ${projected_investment_gain:,.2f}")
-            y -= 0.18*inch
-            c.drawString(1*inch, y, f"Total Costs: ${total_costs:,.2f}")
-            y -= 0.18*inch
-            c.drawString(1*inch, y, f"ROI %: {(roi_pct or 0.0):,.2f}%")
-            c.showPage(); c.save(); pdf_bytes.seek(0)
-            st.download_button("Download Client PDF Summary", data=pdf_bytes,
-                               file_name=f"Amatore_Tax_Summary_{year}.pdf", mime="application/pdf")
-        except Exception as e:
-            st.warning(f"PDF generation unavailable: {e}")
-    else:
-        st.info("Add values to any strategy expander above to see savings and export options.")
+        c.setFont('Helvetica-Bold', 12)
+        c.drawString(1*inch, y, f"Total Strategy Savings: ${total_all:,.2f}")
+        y -= 0.22*inch
+
+        # ROI block
+        c.setFont('Helvetica-Bold', 12); c.drawString(1*inch, y, "Return on Investment (ROI)"); y -= 0.22*inch
+        c.setFont('Helvetica', 10)
+        c.drawString(1*inch, y, f"Planning Fee: ${planning_fee:,.2f}"); y -= 0.18*inch
+        c.drawString(1*inch, y, f"Invested Principal (Oil & Gas + Other): ${principal:,.2f}"); y -= 0.18*inch
+        c.drawString(1*inch, y, f"Projection: {int(proj_years)} yrs @ {exp_return_pct:.1f}% → Projected Investment Gain: ${projected_investment_gain:,.2f}"); y -= 0.18*inch
+        c.drawString(1*inch, y, f"Total Costs: ${total_costs:,.2f}"); y -= 0.18*inch
+        c.drawString(1*inch, y, f"ROI %: {(roi_pct or 0.0):,.2f}%")
+
+        c.showPage(); c.save(); pdf_bytes.seek(0)
+        st.download_button("Download Client PDF Summary", data=pdf_bytes,
+                           file_name=f"Amatore_Tax_Summary_{year}.pdf", mime="application/pdf")
+    except Exception as e:
+        st.warning(f"PDF generation unavailable: {e}")
 
 
 # Render multi-year tabs
